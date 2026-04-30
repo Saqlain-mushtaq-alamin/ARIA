@@ -70,8 +70,20 @@ def record_until_silence(
         wf.writeframes(b"".join(frames))
 
 
+def _load_wav_mono_16k(path: str) -> np.ndarray:
+    with wave.open(path, "rb") as wf:
+        if wf.getnchannels() != 1:
+            raise ValueError("Audio must be mono")
+        if wf.getframerate() != 16000:
+            raise ValueError("Audio must be 16kHz")
+        frames = wf.readframes(wf.getnframes())
+
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+    return samples / 32768.0
+
+
 def transcribe_wav(path: str, model_name: str = "base") -> str:
-    """Transcribe a WAV file using Whisper."""
+    """Transcribe a WAV file using Whisper without ffmpeg."""
     try:
         import whisper
     except ImportError as exc:
@@ -79,8 +91,9 @@ def transcribe_wav(path: str, model_name: str = "base") -> str:
             "Whisper is not installed. Run: pip install openai-whisper"
         ) from exc
 
+    audio = _load_wav_mono_16k(path)
     model = whisper.load_model(model_name)
-    result = model.transcribe(path, fp16=False)
+    result = model.transcribe(audio, fp16=False)
     return str(result.get("text", "")).strip()
 
 
