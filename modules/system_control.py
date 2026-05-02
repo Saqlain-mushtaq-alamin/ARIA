@@ -1,0 +1,117 @@
+"""System control actions for Windows."""
+
+from __future__ import annotations
+
+from typing import Iterable
+import shutil
+import subprocess
+import time
+
+import psutil
+import pyautogui
+import pyperclip
+from pywinauto import Application
+
+
+APP_ALIASES = {
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe",
+    "notepad": "notepad.exe",
+    "calculator": "calc.exe",
+}
+
+
+def _resolve_executable(name: str) -> str:
+    key = name.strip().lower()
+    exe = APP_ALIASES.get(key, name)
+    if not exe.lower().endswith(".exe") and "\\" not in exe and "/" not in exe:
+        exe = f"{exe}.exe"
+    return exe
+
+
+def _iter_matching_processes(exe_name: str) -> Iterable[psutil.Process]:
+    exe_lower = exe_name.lower()
+    for proc in psutil.process_iter(["pid", "name"]):
+        name = proc.info.get("name")
+        if name and name.lower() == exe_lower:
+            yield proc
+
+
+def open_app(name: str) -> str:
+    """Launch an application by its friendly name."""
+    if not name:
+        raise ValueError("App name is required")
+
+    exe = _resolve_executable(name)
+    path = shutil.which(exe) or exe
+
+    try:
+        Application(backend="uia").start(path)
+    except Exception:
+        subprocess.Popen(path)
+
+    return f"Opened {name}"
+
+
+def close_window(name: str) -> str:
+    """Close a running application by name."""
+    if not name:
+        raise ValueError("App name is required")
+
+    exe = _resolve_executable(name)
+    procs = list(_iter_matching_processes(exe))
+    if not procs:
+        return f"No running process found for {name}"
+
+    for proc in procs:
+        try:
+            app = Application(backend="uia").connect(process=proc.pid)
+            app.top_window().close()
+        except Exception:
+            pass
+
+    deadline = time.time() + 2
+    for proc in procs:
+        while time.time() < deadline and proc.is_running():
+            time.sleep(0.1)
+
+    for proc in procs:
+        if proc.is_running():
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+
+    return f"Closed {name}"
+
+
+def set_volume(level: int) -> str:
+    """Set the system volume using key presses (0-100)."""
+    volume = int(level)
+    if volume < 0 or volume > 100:
+        raise ValueError("Volume must be between 0 and 100")
+
+    steps = 50
+    pyautogui.press("volumedown", presses=steps, interval=0.01)
+    up_presses = round(steps * (volume / 100))
+    if up_presses:
+        pyautogui.press("volumeup", presses=up_presses, interval=0.01)
+
+    return f"Volume set to {volume}"
+
+
+def get_clipboard() -> str:
+    """Return current clipboard text."""
+    return pyperclip.paste()
+
+
+def type_text(text: str) -> str:
+    """Type text using the keyboard automation."""
+    if text is None:
+        raise ValueError("Text is required")
+
+    pyautogui.write(text, interval=0.01)
+    return "Typed text"
