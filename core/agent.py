@@ -7,6 +7,7 @@ import json
 from langchain_core.tools import Tool
 
 from core.router import dispatch_intent
+from modules.content_generator import generate_text
 from modules import system_control
 from safety.confirmation_engine import confirm_action, requires_confirmation
 from safety.harm_classifier import blocked_response, is_blocked
@@ -62,6 +63,23 @@ def process_text(user_text: str) -> str:
 
     if is_blocked(payload):
         return blocked_response(payload)
+
+    intent = str(payload.get("intent", "")).strip().lower()
+    parameters = payload.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        parameters = {}
+
+    if intent in {"answer_question", "type_generated_text"}:
+        prompt = parameters.get("prompt") or user_text
+        generated = generate_text(prompt)
+        if not generated:
+            return "No response generated"
+        if intent == "type_generated_text":
+            try:
+                return system_control.type_text(generated)
+            except Exception as exc:
+                return f"Failed to type response: {exc}"
+        return generated
 
     if requires_confirmation(payload):
         if not confirm_action(payload, seconds=5):
