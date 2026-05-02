@@ -72,12 +72,17 @@ def speak(text: str, model_path: str | None = None, piper_exe: str | None = None
         wav_path = tmp.name
 
     try:
-        subprocess.run(
-            [exe, "--model", model, "--output_file", wav_path],
-            input=text,
-            text=True,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                [exe, "--model", model, "--output_file", wav_path],
+                input=text,
+                text=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            return
 
         if platform.system() == "Windows":
             import winsound

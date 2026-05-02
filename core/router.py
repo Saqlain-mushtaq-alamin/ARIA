@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict
 
-from modules import system_control
+from modules import browser_agent, system_control
 
 
 INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
@@ -13,6 +13,11 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "set_volume": system_control.set_volume,
     "get_clipboard": system_control.get_clipboard,
     "type_text": system_control.type_text,
+    "open_url": browser_agent.open_url,
+    "search_web": browser_agent.search_web,
+    "click_element": browser_agent.click_element,
+    "fill_form": browser_agent.fill_form,
+    "extract_text": browser_agent.extract_text,
 }
 
 INTENT_ALIASES = {
@@ -29,6 +34,15 @@ INTENT_ALIASES = {
     "read_clipboard": "get_clipboard",
     "type": "type_text",
     "typing": "type_text",
+    "open_url": "open_url",
+    "browse": "open_url",
+    "go_to": "open_url",
+    "visit": "open_url",
+    "search": "search_web",
+    "web_search": "search_web",
+    "click": "click_element",
+    "form_fill": "fill_form",
+    "extract": "extract_text",
 }
 
 
@@ -84,5 +98,67 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
 
     if intent == "get_clipboard":
         return handler()
+
+    if intent == "open_url":
+        url = parameters.get("url") or payload.get("url")
+        if not url:
+            raise ValueError("URL is required")
+        headless = parameters.get("headless", False)
+        use_chrome = parameters.get("use_chrome", True)
+        return handler(str(url), headless=bool(headless), use_chrome=bool(use_chrome))
+
+    if intent == "search_web":
+        query = parameters.get("query") or payload.get("query")
+        if not query:
+            raise ValueError("Search query is required")
+        engine = parameters.get("engine", "google")
+        max_results = parameters.get("max_results", 5)
+        headless = parameters.get("headless", False)
+        use_chrome = parameters.get("use_chrome", True)
+        return handler(
+            str(query),
+            max_results=int(max_results),
+            engine=str(engine),
+            headless=bool(headless),
+            use_chrome=bool(use_chrome),
+        )
+
+    if intent == "click_element":
+        selector = parameters.get("selector") or payload.get("selector")
+        if not selector:
+            raise ValueError("Selector is required")
+        headless = parameters.get("headless", False)
+        use_chrome = parameters.get("use_chrome", True)
+        return handler(
+            str(selector),
+            headless=bool(headless),
+            use_chrome=bool(use_chrome),
+        )
+
+    if intent == "fill_form":
+        form_data = parameters or payload.get("data")
+        if not form_data:
+            raise ValueError("Form data is required")
+        if isinstance(form_data, dict):
+            headless = form_data.get("headless", False)
+            use_chrome = form_data.get("use_chrome", True)
+        else:
+            headless = False
+            use_chrome = True
+        return handler(form_data, headless=bool(headless), use_chrome=bool(use_chrome))
+
+    if intent == "extract_text":
+        url = parameters.get("url") or payload.get("url")
+        if not url:
+            raise ValueError("URL is required")
+        max_chars = parameters.get("max_chars", 5000)
+        headless = parameters.get("headless", False)
+        use_chrome = parameters.get("use_chrome", True)
+        return handler(
+            str(url),
+            max_chars=int(max_chars),
+            headless=bool(headless),
+            use_chrome=bool(use_chrome),
+        )
 
     return handler(**parameters)

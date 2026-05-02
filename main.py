@@ -15,7 +15,10 @@ def _handle_wake_word() -> None:
         return
     response = process_text(text)
     print(response)
-    speak(response)
+    try:
+        speak(response)
+    except Exception as exc:
+        print(f"TTS failed: {exc}")
 
 
 def main() -> None:
