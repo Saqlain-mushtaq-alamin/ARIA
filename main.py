@@ -6,6 +6,7 @@ import threading
 import time
 
 from core.agent import process_text
+from memory.conversation_log import log_interaction
 from voice.stt import listen_and_transcribe
 from voice.tts import speak
 from voice.wake_word import start_wake_word_listener
@@ -40,6 +41,10 @@ def _handle_wake_word() -> None:
     response = process_text(text)
     print(response)
     try:
+        log_interaction(text, response, metadata={"source": "voice"})
+    except Exception as exc:
+        print(f"Log failed: {exc}")
+    try:
         speak(response)
     except Exception as exc:
         print(f"TTS failed: {exc}")
@@ -57,6 +62,10 @@ def _text_input_loop() -> None:
             continue
         response = process_text(text)
         print(response)
+        try:
+            log_interaction(text, response, metadata={"source": "text"})
+        except Exception as exc:
+            print(f"Log failed: {exc}")
         try:
             speak(response)
         except Exception as exc:

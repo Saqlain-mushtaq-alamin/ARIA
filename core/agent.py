@@ -14,6 +14,11 @@ from safety.confirmation_engine import confirm_action, requires_confirmation
 from safety.harm_classifier import blocked_response, is_blocked
 from .intent_classifier import classify_intent
 
+try:
+    from memory.vector_store import search_memory
+except Exception:  # pragma: no cover
+    search_memory = None
+
 
 def _get_clipboard(_: str | None = None) -> str:
     return system_control.get_clipboard()
@@ -167,9 +172,36 @@ def process_text(user_text: str) -> str:
     if not isinstance(parameters, dict):
         parameters = {}
 
+    def build_prompt_with_memory(prompt: str) -> str:
+        if search_memory is None:
+            return prompt
+        try:
+            matches = search_memory(prompt, top_k=5)
+        except Exception:
+            return prompt
+
+        if not matches:
+            return prompt
+
+        memory_lines: list[str] = []
+        for m in matches:
+            date = m.metadata.get("date") or m.metadata.get("timestamp")
+            if date:
+                memory_lines.append(f"- {m.text} ({date})")
+            else:
+                memory_lines.append(f"- {m.text}")
+
+        memory_block = "\n".join(memory_lines)
+        return (
+            "Use the following memory as context if relevant.\n\n"
+            f"Memory:\n{memory_block}\n\n"
+            f"User: {prompt}"
+        )
+
     if intent in {"answer_question", "type_generated_text"}:
         prompt = parameters.get("prompt") or user_text
-        generated = generate_text(prompt)
+        augmented_prompt = build_prompt_with_memory(str(prompt))
+        generated = generate_text(augmented_prompt)
         if not generated:
             return "No response generated"
         if intent == "type_generated_text":
