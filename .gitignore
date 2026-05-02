@@ -24,3 +24,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Playwright / browser profile (runtime-generated, can be locked by the browser)
+data/playwright_profile/
