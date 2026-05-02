@@ -15,6 +15,27 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "type_text": system_control.type_text,
 }
 
+INTENT_ALIASES = {
+    "open": "open_app",
+    "open_application": "open_app",
+    "launch_app": "open_app",
+    "close": "close_window",
+    "close_app": "close_window",
+    "close_application": "close_window",
+    "volume_change": "set_volume",
+    "change_volume": "set_volume",
+    "set_sound": "set_volume",
+    "clipboard": "get_clipboard",
+    "read_clipboard": "get_clipboard",
+    "type": "type_text",
+    "typing": "type_text",
+}
+
+
+def _normalize_intent(intent: str) -> str:
+    key = intent.strip().lower()
+    return INTENT_ALIASES.get(key, key)
+
 
 def dispatch_intent(payload: Dict[str, Any]) -> Any:
     """Dispatch an intent payload to the appropriate function."""
@@ -25,11 +46,15 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
     if not intent:
         raise ValueError("Missing intent")
 
+    intent = _normalize_intent(str(intent))
+
     handler = INTENT_REGISTRY.get(intent)
     if handler is None:
         raise KeyError(f"Unknown intent: {intent}")
 
     parameters = payload.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        parameters = {}
 
     if intent in {"open_app", "close_window"}:
         name = (

@@ -50,7 +50,10 @@ def open_app(name: str) -> str:
     try:
         Application(backend="uia").start(path)
     except Exception:
-        subprocess.Popen(path)
+        try:
+            subprocess.Popen(path)
+        except FileNotFoundError:
+            subprocess.Popen(["cmd", "/c", "start", "", name])
 
     return f"Opened {name}"
 

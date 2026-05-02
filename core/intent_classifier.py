@@ -11,6 +11,7 @@ import ollama
 SYSTEM_PROMPT = (
     "You are an intent classifier. "
     "Return ONLY a compact JSON object with keys: intent, parameters (optional), app (optional). "
+    "Use ONLY these intents: open_app, close_window, set_volume, get_clipboard, type_text. "
     "For open/close actions include parameters.app_name. "
     "For volume changes include parameters.level as a number."
 )
