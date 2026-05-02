@@ -6,7 +6,10 @@ import json
 
 from langchain_core.tools import Tool
 
+from core.router import dispatch_intent
 from modules import system_control
+from safety.confirmation_engine import confirm_action, requires_confirmation
+from safety.harm_classifier import blocked_response, is_blocked
 from .intent_classifier import classify_intent
 
 
@@ -49,7 +52,29 @@ def get_tools() -> list[Tool]:
 
 def process_text(user_text: str) -> str:
     """Process user input and return a response string."""
-    result = classify_intent(user_text)
+    if not user_text.strip():
+        return "No input received"
+
+    try:
+        payload = classify_intent(user_text)
+    except Exception as exc:
+        return f"Failed to classify intent: {exc}"
+
+    if is_blocked(payload):
+        return blocked_response(payload)
+
+    if requires_confirmation(payload):
+        if not confirm_action(payload, seconds=5):
+            return "Action cancelled"
+
+    try:
+        result = dispatch_intent(payload)
+    except Exception as exc:
+        return f"Failed to execute action: {exc}"
+
+    if isinstance(result, str):
+        return result
+
     return json.dumps(result, ensure_ascii=True, indent=2)
 
 
