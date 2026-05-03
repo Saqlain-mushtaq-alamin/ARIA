@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import re
+from typing import Any
 
 from langchain_core.tools import Tool
 
@@ -144,14 +146,19 @@ def process_text(user_text: str) -> str:
     if not user_text.strip():
         return "No input received"
 
-    payload = _parse_browser_command(user_text)
-    if payload is None:
+    payload: dict[str, Any] = {}
+    parsed_payload = _parse_browser_command(user_text)
+    if isinstance(parsed_payload, dict):
+        payload = parsed_payload
+    else:
         try:
-            payload = classify_intent(user_text)
+            classified_payload = classify_intent(user_text)
         except Exception as exc:
             return f"Failed to classify intent: {exc}"
+        if isinstance(classified_payload, dict):
+            payload = classified_payload
 
-    if payload and payload.get("intent") == "open_app":
+    if payload.get("intent") == "open_app":
         params = payload.get("parameters") or {}
         app_name = params.get("app_name") or params.get("name") or payload.get("app")
         if app_name:
@@ -185,11 +192,24 @@ def process_text(user_text: str) -> str:
 
         memory_lines: list[str] = []
         for m in matches:
-            date = m.metadata.get("date") or m.metadata.get("timestamp")
+            text: str | None = getattr(m, "text", None)
+            if text is None and isinstance(m, Mapping):
+                text = str(m.get("text") or "")
+            if text is None:
+                text = str(m)
+
+            metadata_obj: Any = getattr(m, "metadata", None)
+            if metadata_obj is None and isinstance(m, Mapping):
+                metadata_obj = m.get("metadata")
+
+            date: Any = None
+            if isinstance(metadata_obj, Mapping):
+                date = metadata_obj.get("date") or metadata_obj.get("timestamp")
+
             if date:
-                memory_lines.append(f"- {m.text} ({date})")
+                memory_lines.append(f"- {text} ({date})")
             else:
-                memory_lines.append(f"- {m.text}")
+                memory_lines.append(f"- {text}")
 
         memory_block = "\n".join(memory_lines)
         return (

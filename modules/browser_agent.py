@@ -1,10 +1,20 @@
-"""Browser automation helpers using Playwright."""
+"""Browser automation helpers using Playwright.
+
+Playwright's *sync* API is not thread-safe: Playwright/BrowserContext/Page
+objects must only be used from the Python thread that created them. ARIA runs
+multiple threads (e.g., voice + text input), so this module funnels all
+Playwright work through a single dedicated worker thread to avoid greenlet
+"Cannot switch to a different thread" errors.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from urllib.parse import quote_plus
+import concurrent.futures
 import os
+import queue
+import threading
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -21,6 +31,53 @@ _PLAYWRIGHT = None
 _PERSISTENT_CONTEXT = None
 _PERSISTENT_PAGE = None
 _PROFILE_DIR = os.path.join("data", "playwright_profile")
+
+
+_BROWSER_TASK_QUEUE: "queue.Queue[tuple[Callable[[], Any] | None, concurrent.futures.Future[Any] | None]]" = queue.Queue()
+_BROWSER_THREAD: Optional[threading.Thread] = None
+_BROWSER_THREAD_ID: Optional[int] = None
+_BROWSER_THREAD_LOCK = threading.Lock()
+
+
+def _browser_worker_main() -> None:
+    global _BROWSER_THREAD_ID
+    _BROWSER_THREAD_ID = threading.get_ident()
+    while True:
+        func, fut = _BROWSER_TASK_QUEUE.get()
+        if func is None:
+            if fut is not None:
+                fut.set_result(None)
+            break
+        assert fut is not None
+        try:
+            fut.set_result(func())
+        except Exception as exc:
+            fut.set_exception(exc)
+
+
+def _ensure_browser_worker_started() -> None:
+    global _BROWSER_THREAD
+    if _BROWSER_THREAD is not None and _BROWSER_THREAD.is_alive():
+        return
+    with _BROWSER_THREAD_LOCK:
+        if _BROWSER_THREAD is not None and _BROWSER_THREAD.is_alive():
+            return
+        _BROWSER_THREAD = threading.Thread(
+            target=_browser_worker_main,
+            name="browser-agent-playwright-worker",
+            daemon=True,
+        )
+        _BROWSER_THREAD.start()
+
+
+def _run_in_browser_thread(func: Callable[[], Any]) -> Any:
+    """Run func on the dedicated browser worker thread and return its result."""
+    if _BROWSER_THREAD_ID is not None and threading.get_ident() == _BROWSER_THREAD_ID:
+        return func()
+    _ensure_browser_worker_started()
+    fut: "concurrent.futures.Future[Any]" = concurrent.futures.Future()
+    _BROWSER_TASK_QUEUE.put((func, fut))
+    return fut.result()
 
 
 def _normalize_url(url: str) -> str:
@@ -127,6 +184,15 @@ def open_url(
 ) -> str:
     """Launch a browser and open a URL, returning the page title."""
 
+    return _run_in_browser_thread(lambda: _open_url_impl(url, headless=headless, use_chrome=use_chrome))
+
+
+def _open_url_impl(
+    url: str,
+    headless: bool = False,
+    use_chrome: bool = True,
+) -> str:
+
     def action(page):
         return page.title()
 
@@ -141,6 +207,25 @@ def search_web(
     use_chrome: bool = True,
 ) -> List[Dict[str, str]]:
     """Search the web and return a list of result dicts with title and url."""
+
+    return _run_in_browser_thread(
+        lambda: _search_web_impl(
+            query,
+            max_results=max_results,
+            engine=engine,
+            headless=headless,
+            use_chrome=use_chrome,
+        )
+    )
+
+
+def _search_web_impl(
+    query: str,
+    max_results: int = 5,
+    engine: str = "duckduckgo",
+    headless: bool = False,
+    use_chrome: bool = True,
+) -> List[Dict[str, str]]:
     if not query or not query.strip():
         raise ValueError("Search query is required")
 
@@ -191,6 +276,15 @@ def click_element(
     use_chrome: bool = True,
 ) -> str:
     """Open the last visited URL and click the matching selector."""
+
+    return _run_in_browser_thread(lambda: _click_element_impl(selector, headless=headless, use_chrome=use_chrome))
+
+
+def _click_element_impl(
+    selector: str,
+    headless: bool = False,
+    use_chrome: bool = True,
+) -> str:
     if not selector or not selector.strip():
         raise ValueError("Selector is required")
     if not _LAST_URL:
@@ -217,6 +311,15 @@ def fill_form(
         "submit": "button[type='submit']"  # optional
     }
     """
+
+    return _run_in_browser_thread(lambda: _fill_form_impl(data, headless=headless, use_chrome=use_chrome))
+
+
+def _fill_form_impl(
+    data: Dict[str, Any],
+    headless: bool = False,
+    use_chrome: bool = True,
+) -> str:
     if not isinstance(data, dict):
         raise ValueError("Form data must be a dict")
     url = data.get("url")
@@ -244,6 +347,18 @@ def extract_text(
     use_chrome: bool = True,
 ) -> str:
     """Extract text content from the given URL."""
+
+    return _run_in_browser_thread(
+        lambda: _extract_text_impl(url, max_chars=max_chars, headless=headless, use_chrome=use_chrome)
+    )
+
+
+def _extract_text_impl(
+    url: str,
+    max_chars: int = 5000,
+    headless: bool = False,
+    use_chrome: bool = True,
+) -> str:
 
     def action(page):
         text = page.inner_text("body")

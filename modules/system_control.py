@@ -20,15 +20,33 @@ APP_ALIASES = {
     "microsoft edge": "msedge.exe",
     "notepad": "notepad.exe",
     "calculator": "calc.exe",
+    "calculater": "calc.exe",
+    "settings": "ms-settings:",
+    "setting": "ms-settings:",
+    "clock": "ms-clock:",
+    "alarms": "ms-clock:",
 }
 
 
-def _resolve_executable(name: str) -> str:
+def _looks_like_special_target(target: str) -> bool:
+    t = target.strip().lower()
+    return (
+        t.startswith("ms-settings:")
+        or t.startswith("ms-clock:")
+        or t.startswith("shell:")
+        or t.startswith("http://")
+        or t.startswith("https://")
+    )
+
+
+def _resolve_launch_target(name: str) -> str:
     key = name.strip().lower()
-    exe = APP_ALIASES.get(key, name)
-    if not exe.lower().endswith(".exe") and "\\" not in exe and "/" not in exe:
-        exe = f"{exe}.exe"
-    return exe
+    target = APP_ALIASES.get(key, name)
+    if _looks_like_special_target(target):
+        return target
+    if not target.lower().endswith(".exe") and "\\" not in target and "/" not in target:
+        target = f"{target}.exe"
+    return target
 
 
 def _iter_matching_processes(exe_name: str) -> Iterable[psutil.Process]:
@@ -44,8 +62,14 @@ def open_app(name: str) -> str:
     if not name:
         raise ValueError("App name is required")
 
-    exe = _resolve_executable(name)
-    path = shutil.which(exe) or exe
+    target = _resolve_launch_target(name)
+    resolved = shutil.which(target) if not _looks_like_special_target(target) else None
+    path = resolved or target
+
+    # URI/shell targets (Settings, Clock, UWP apps) are best launched via `start`.
+    if _looks_like_special_target(path):
+        subprocess.Popen(["cmd", "/c", "start", "", path])
+        return f"Opened {name}"
 
     try:
         Application(backend="uia").start(path)
@@ -63,7 +87,9 @@ def close_window(name: str) -> str:
     if not name:
         raise ValueError("App name is required")
 
-    exe = _resolve_executable(name)
+    exe = _resolve_launch_target(name)
+    if _looks_like_special_target(exe):
+        return f"Close is not supported for {name}"
     procs = list(_iter_matching_processes(exe))
     if not procs:
         return f"No running process found for {name}"
