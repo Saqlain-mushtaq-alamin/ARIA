@@ -6,6 +6,8 @@ import os
 import tempfile
 import wave
 from typing import Optional
+import difflib
+import re
 
 import numpy as np
 import pyaudio
@@ -25,6 +27,7 @@ def record_until_silence(
     silence_seconds: float = 1.0,
     max_seconds: float = 15.0,
     threshold: float = 500.0,
+    input_device_index: int | None = None,
 ) -> None:
     """Record audio to a WAV file until silence is detected."""
     audio = pyaudio.PyAudio()
@@ -33,6 +36,7 @@ def record_until_silence(
         channels=1,
         rate=rate,
         input=True,
+        input_device_index=input_device_index,
         frames_per_buffer=chunk,
     )
 
@@ -82,7 +86,12 @@ def _load_wav_mono_16k(path: str) -> np.ndarray:
     return samples / 32768.0
 
 
-def transcribe_wav(path: str, model_name: str = "base") -> str:
+def transcribe_wav(
+    path: str,
+    model_name: str = "base",
+    language: str = "en",
+    initial_prompt: str | None = None,
+) -> str:
     """Transcribe a WAV file using Whisper without ffmpeg."""
     try:
         import whisper
@@ -93,18 +102,90 @@ def transcribe_wav(path: str, model_name: str = "base") -> str:
 
     audio = _load_wav_mono_16k(path)
     model = whisper.load_model(model_name)
-    result = model.transcribe(audio, fp16=False)
+    result = model.transcribe(
+        audio,
+        fp16=False,
+        language=language,
+        initial_prompt=initial_prompt,
+    )
     return str(result.get("text", "")).strip()
 
 
-def listen_and_transcribe(model_name: str = "base") -> str:
+def _postprocess_command(text: str) -> str:
+    """Light cleanup for command-style speech.
+
+    Focus: fix common mishears (e.g., "bad pad" -> "notepad") and
+    improve app-name recognition in short commands.
+    """
+    cleaned = " ".join((text or "").strip().split())
+    if not cleaned:
+        return ""
+
+    lower = cleaned.lower()
+
+    # Common STT confusions for short commands.
+    replacements = {
+        "bad pad": "notepad",
+        "note pad": "notepad",
+        "noteeped": "notepad",
+        "task maneger": "task manager",
+        "taskmanager": "task manager",
+        "fire fox": "firefox",
+        "google": "google",
+    }
+    for wrong, right in replacements.items():
+        lower = re.sub(rf"\b{re.escape(wrong)}\b", right, lower)
+
+    # If the user said "open X" or "close X", fuzzy match X to known apps.
+    try:
+        from modules import system_control
+
+        known = sorted(system_control.APP_ALIASES.keys())
+    except Exception:
+        known = []
+
+    m = re.match(r"^(open|close)\s+(.+)$", lower)
+    if m and known:
+        verb = m.group(1)
+        target = m.group(2).strip().rstrip(" .,!?:;")
+        if target and target not in known and "." not in target:
+            best = difflib.get_close_matches(target, known, n=1, cutoff=0.78)
+            if best:
+                return f"{verb} {best[0]}"
+
+    return lower
+
+
+def listen_and_transcribe(
+    model_name: str = "small",
+    input_device_index: int | None = None,
+) -> str:
     """Record until silence and return transcribed text."""
     temp_path: Optional[str] = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             temp_path = tmp.name
-        record_until_silence(temp_path)
-        return transcribe_wav(temp_path, model_name=model_name)
+
+        # A slightly higher silence threshold tends to help command-style speech.
+        threshold = float(os.getenv("VOICE_SILENCE_THRESHOLD", "650"))
+        record_until_silence(
+            temp_path,
+            threshold=threshold,
+            input_device_index=input_device_index,
+        )
+
+        prompt = (
+            "You are a desktop assistant. Transcribe short commands like: "
+            "open notepad, open settings, open calculator, open chrome, open firefox, "
+            "open task manager, close notepad, set volume 10, search on google."
+        )
+        raw = transcribe_wav(
+            temp_path,
+            model_name=model_name,
+            language=os.getenv("VOICE_LANGUAGE", "en"),
+            initial_prompt=os.getenv("VOICE_INITIAL_PROMPT") or prompt,
+        )
+        return _postprocess_command(raw)
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)

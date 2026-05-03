@@ -33,11 +33,13 @@ def _load_env() -> None:
     load_dotenv(os.path.join("config", ".env"))
 
 
-def _handle_wake_word() -> None:
-    text = listen_and_transcribe()
+def _handle_wake_word(device_index: int) -> None:
+    text = listen_and_transcribe(input_device_index=device_index)
     if not text:
         print("No speech detected.")
         return
+    if os.getenv("VOICE_DEBUG") == "1":
+        print(f"Heard: {text}")
     response = process_text(text)
     print(response)
     try:
