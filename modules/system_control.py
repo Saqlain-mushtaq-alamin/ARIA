@@ -6,6 +6,7 @@ from typing import Iterable
 import os
 import shutil
 import subprocess
+import threading
 import time
 import warnings
 
@@ -160,25 +161,43 @@ def close_window(name: str) -> str:
     if not procs:
         return f"No running process found for {display}"
 
+    # Some applications (notably browsers) spawn many processes and UI automation
+    # can block. Keep close_window responsive by bounding UI-close attempts.
+    multi_process_exes = {"chrome.exe", "msedge.exe", "firefox.exe"}
+    try_ui_close = os.getenv("CLOSE_TRY_UI", "1") == "1" and exe.lower() not in multi_process_exes
+    ui_timeout_s = float(os.getenv("CLOSE_UI_TIMEOUT_SECONDS", "0.8"))
+
+    def _ui_close_pid(pid: int) -> None:
+        try:
+            app = Application(backend="uia").connect(process=pid)
+            app.top_window().close()
+        except Exception:
+            return
+
+    if try_ui_close:
+        for proc in procs:
+            t = threading.Thread(target=_ui_close_pid, args=(proc.pid,), daemon=True)
+            t.start()
+            t.join(timeout=ui_timeout_s)
+
+    # Terminate all processes quickly, then wait with a single global deadline.
     for proc in procs:
         try:
-            app = Application(backend="uia").connect(process=proc.pid)
-            app.top_window().close()
+            proc.terminate()
         except Exception:
             pass
 
-    deadline = time.time() + 2
-    for proc in procs:
-        while time.time() < deadline and proc.is_running():
-            time.sleep(0.1)
+    deadline = time.time() + float(os.getenv("CLOSE_TERMINATE_WAIT_SECONDS", "1.5"))
+    remaining = [p for p in procs if p.is_running()]
+    while remaining and time.time() < deadline:
+        time.sleep(0.05)
+        remaining = [p for p in remaining if p.is_running()]
 
-    for proc in procs:
-        if proc.is_running():
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except Exception:
-                proc.kill()
+    for proc in remaining:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
     return f"Closed {display}"
 
