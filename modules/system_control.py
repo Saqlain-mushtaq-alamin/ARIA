@@ -16,6 +16,8 @@ from pywinauto import Application
 APP_ALIASES = {
     "chrome": "chrome.exe",
     "google chrome": "chrome.exe",
+    "firefox": "firefox.exe",
+    "mozilla firefox": "firefox.exe",
     "edge": "msedge.exe",
     "microsoft edge": "msedge.exe",
     "notepad": "notepad.exe",
@@ -26,6 +28,15 @@ APP_ALIASES = {
     "clock": "ms-clock:",
     "alarms": "ms-clock:",
 }
+
+
+def _normalize_app_key(name: str) -> str:
+    key = name.strip().lower().rstrip(" .,!?:;")
+    if key.endswith(" app"):
+        key = key[: -len(" app")].strip()
+    if key.endswith(" application"):
+        key = key[: -len(" application")].strip()
+    return key
 
 
 def _looks_like_special_target(target: str) -> bool:
@@ -40,8 +51,8 @@ def _looks_like_special_target(target: str) -> bool:
 
 
 def _resolve_launch_target(name: str) -> str:
-    key = name.strip().lower()
-    target = APP_ALIASES.get(key, name)
+    key = _normalize_app_key(name)
+    target = APP_ALIASES.get(key, name.strip())
     if _looks_like_special_target(target):
         return target
     if not target.lower().endswith(".exe") and "\\" not in target and "/" not in target:

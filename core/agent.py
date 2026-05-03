@@ -93,6 +93,11 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
     if match:
         target = match.group(2).strip().rstrip(" .,!?:;")
         target_lower = target.lower()
+        if target_lower.endswith(" app") and len(target_lower) > 4:
+            return {
+                "intent": "open_app",
+                "parameters": {"app_name": target[:-4].strip()},
+            }
         known_apps = set(system_control.APP_ALIASES.keys())
         known_apps.update(system_control.APP_ALIASES.values())
         if "app" in target_lower and "." not in target:
@@ -165,7 +170,10 @@ def process_text(user_text: str) -> str:
             normalized = str(app_name).strip().lower().rstrip(" .,!?:;")
             known_apps = set(system_control.APP_ALIASES.keys())
             known_apps.update(system_control.APP_ALIASES.values())
-            if normalized not in known_apps and "." not in normalized:
+            # Only auto-convert an unknown app name into a URL when it's a single token.
+            # Names with spaces (e.g. "firefox app") are far more likely to be apps,
+            # and would create invalid URLs.
+            if normalized not in known_apps and "." not in normalized and " " not in normalized:
                 payload = {
                     "intent": "open_url",
                     "parameters": {"url": f"{normalized}.com", "use_chrome": True},
