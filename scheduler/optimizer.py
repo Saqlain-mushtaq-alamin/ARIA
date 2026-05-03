@@ -163,6 +163,22 @@ def optimize_day(
     if cursor < day_end_m:
         free.append((cursor, day_end_m))
 
+    # Prefer scheduling flexible tasks in the "middle" of the day first:
+    # gaps between fixed blocks, then pre-gap (before first fixed), then post-gap.
+    if len(clipped_fixed) >= 1:
+        first_fixed_start = clipped_fixed[0][0]
+        last_fixed_end = clipped_fixed[-1][1]
+
+        def free_rank(interval: tuple[int, int]) -> tuple[int, int]:
+            start, _end = interval
+            if start >= first_fixed_start and start < last_fixed_end:
+                return (0, start)  # between fixed blocks
+            if start < first_fixed_start:
+                return (1, start)  # before first fixed
+            return (2, start)  # after last fixed
+
+        free.sort(key=free_rank)
+
     # Sort flexible by deadline first, then longer (so big tasks get a chance).
     flexible.sort(
         key=lambda t: (

@@ -212,6 +212,15 @@ def _extract_duration_minutes(segment: str, config: ParseConfig) -> int | None:
             return num * config.minutes_per_chapter
         return num * config.minutes_per_page
 
+    # Assignments are often medium/heavy work; default to 2h per assignment.
+    assign_match = re.search(
+        r"\b(?P<num>\d+)\b(?:\s+\w+){0,2}\s+assignments?\b",
+        s,
+    )
+    if assign_match:
+        num = int(assign_match.group("num"))
+        return num * 120
+
     return None
 
 
@@ -264,7 +273,7 @@ def _clean_task_name(segment: str) -> str:
 
     # If the cleaned name starts with a workload quantity, drop the number.
     # Example: "3 chemistry chapters" -> "chemistry chapters".
-    if re.match(r"^\d+\b", s) and re.search(r"\b(chapters?|pages?)\b", s, flags=re.IGNORECASE):
+    if re.match(r"^\d+\b", s) and re.search(r"\b(chapters?|pages?|assignments?)\b", s, flags=re.IGNORECASE):
         s = re.sub(r"^\d+\s+", "", s).strip()
 
     return s
