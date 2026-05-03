@@ -13,6 +13,9 @@ import numpy as np
 import pyaudio
 
 
+_WHISPER_MODELS: dict[str, object] = {}
+
+
 def _rms(audio_chunk: bytes) -> float:
     samples = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
     if samples.size == 0:
@@ -101,7 +104,10 @@ def transcribe_wav(
         ) from exc
 
     audio = _load_wav_mono_16k(path)
-    model = whisper.load_model(model_name)
+    model = _WHISPER_MODELS.get(model_name)
+    if model is None:
+        model = whisper.load_model(model_name)
+        _WHISPER_MODELS[model_name] = model
     result = model.transcribe(
         audio,
         fp16=False,
