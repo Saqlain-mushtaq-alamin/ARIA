@@ -117,13 +117,15 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
         }
 
     match = re.match(
-        r"^search\s+(.+?)(?:\s+on\s+(google|duckduckgo|ddg))?$",
+        r"^search\s+(.+?)(?:\s+on\s+(google|goolge|duckduckgo|ddg))?$",
         text,
         flags=re.IGNORECASE,
     )
     if match:
         query = match.group(1).strip()
         engine = match.group(2) or "google"
+        if engine.strip().lower() == "goolge":
+            engine = "google"
         return {
             "intent": "search_web",
             "parameters": {"query": query, "engine": engine, "use_chrome": True},

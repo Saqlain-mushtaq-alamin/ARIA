@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Iterable
+import os
 import shutil
 import subprocess
 import time
@@ -33,6 +34,21 @@ APP_ALIASES = {
     "taskmgr": "taskmgr.exe",
     "control panel": "control.exe",
 
+    "file explorer": "explorer.exe",
+    "explorer": "explorer.exe",
+    "command prompt": "cmd.exe",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+
+    # Common desktop apps
+    "telegram": "Telegram.exe",
+    "telegram desktop": "Telegram.exe",
+    "tor": "start:Tor Browser",
+    "tor browser": "start:Tor Browser",
+
+    # UWP apps
+    "feedback hub": "shell:AppsFolder\\Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe!App",
+
     # Media Player naming varies by Windows version.
     # - "windows media player" launches the legacy desktop app.
     # - "media player" launches the UWP media app when available.
@@ -43,6 +59,8 @@ APP_ALIASES = {
 
 def _normalize_app_key(name: str) -> str:
     key = name.strip().lower().rstrip(" .,!?:;")
+    key = key.replace("_", " ").replace("-", " ")
+    key = " ".join(key.split())
     if key.endswith(" app"):
         key = key[: -len(" app")].strip()
     if key.endswith(" application"):
@@ -53,7 +71,8 @@ def _normalize_app_key(name: str) -> str:
 def _looks_like_special_target(target: str) -> bool:
     t = target.strip().lower()
     return (
-        t.startswith("ms-settings:")
+        t.startswith("start:")
+        or t.startswith("ms-settings:")
         or t.startswith("ms-clock:")
         or t.startswith("shell:")
         or t.startswith("http://")
@@ -69,6 +88,12 @@ def _resolve_launch_target(name: str) -> str:
     if not target.lower().endswith(".exe") and "\\" not in target and "/" not in target:
         target = f"{target}.exe"
     return target
+
+
+def _display_app_name(name: str) -> str:
+    """Return a human-friendly app name for responses."""
+    normalized = _normalize_app_key(name)
+    return normalized or name.strip()
 
 
 def _iter_matching_processes(exe_name: str) -> Iterable[psutil.Process]:
@@ -88,10 +113,22 @@ def open_app(name: str) -> str:
     resolved = shutil.which(target) if not _looks_like_special_target(target) else None
     path = resolved or target
 
-    # URI/shell targets (Settings, Clock, UWP apps) are best launched via `start`.
-    if _looks_like_special_target(path):
-        subprocess.Popen(["cmd", "/c", "start", "", path])
+    # Detach console shells so they don't attach to this process' console.
+    base_exe = os.path.basename(str(path)).lower() if isinstance(path, str) else ""
+    if base_exe in {"cmd.exe", "powershell.exe"}:
+        subprocess.Popen(["cmd", "/c", "start", "", base_exe])
         return f"Opened {name}"
+
+    # URI/shell targets (Settings, Clock, UWP apps) are best launched via `start`.
+    display = _display_app_name(name)
+
+    if _looks_like_special_target(path):
+        if path.strip().lower().startswith("start:"):
+            start_name = path.split(":", 1)[1].strip()
+            subprocess.Popen(["cmd", "/c", "start", "", start_name])
+            return f"Opened {display}"
+        subprocess.Popen(["cmd", "/c", "start", "", path])
+        return f"Opened {display}"
 
     try:
         with warnings.catch_warnings():
@@ -107,7 +144,7 @@ def open_app(name: str) -> str:
         except FileNotFoundError:
             subprocess.Popen(["cmd", "/c", "start", "", name])
 
-    return f"Opened {name}"
+    return f"Opened {display}"
 
 
 def close_window(name: str) -> str:
@@ -115,12 +152,13 @@ def close_window(name: str) -> str:
     if not name:
         raise ValueError("App name is required")
 
+    display = _display_app_name(name)
     exe = _resolve_launch_target(name)
     if _looks_like_special_target(exe):
-        return f"Close is not supported for {name}"
+        return f"Close is not supported for {display}"
     procs = list(_iter_matching_processes(exe))
     if not procs:
-        return f"No running process found for {name}"
+        return f"No running process found for {display}"
 
     for proc in procs:
         try:
@@ -142,7 +180,7 @@ def close_window(name: str) -> str:
             except Exception:
                 proc.kill()
 
-    return f"Closed {name}"
+    return f"Closed {display}"
 
 
 def set_volume(level: int) -> str:
