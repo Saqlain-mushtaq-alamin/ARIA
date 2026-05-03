@@ -106,6 +106,11 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
             return {"intent": "open_app", "parameters": {"app_name": target}}
         if "." in target or target_lower.startswith(("http://", "https://", "localhost")):
             return {"intent": "open_url", "parameters": {"url": target}}
+        if " " in target:
+            # Heuristic: if the user writes a multi-word target with no dots,
+            # it's far more likely to be an app name (e.g. "task manager")
+            # than a URL.
+            return {"intent": "open_app", "parameters": {"app_name": target}}
         return {
             "intent": "open_url",
             "parameters": {"url": f"{target}.com", "use_chrome": True},

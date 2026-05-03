@@ -6,6 +6,7 @@ from typing import Iterable
 import shutil
 import subprocess
 import time
+import warnings
 
 import psutil
 import pyautogui
@@ -27,6 +28,16 @@ APP_ALIASES = {
     "setting": "ms-settings:",
     "clock": "ms-clock:",
     "alarms": "ms-clock:",
+
+    "task manager": "taskmgr.exe",
+    "taskmgr": "taskmgr.exe",
+    "control panel": "control.exe",
+
+    # Media Player naming varies by Windows version.
+    # - "windows media player" launches the legacy desktop app.
+    # - "media player" launches the UWP media app when available.
+    "windows media player": "wmplayer.exe",
+    "media player": "shell:AppsFolder\\Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic",
 }
 
 
@@ -83,7 +94,13 @@ def open_app(name: str) -> str:
         return f"Opened {name}"
 
     try:
-        Application(backend="uia").start(path)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Application is not loaded correctly \(WaitForInputIdle failed\)",
+                category=RuntimeWarning,
+            )
+            Application(backend="uia").start(path)
     except Exception:
         try:
             subprocess.Popen(path)
