@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import wave
-from typing import Optional
+from typing import Any, Optional, Protocol, cast
 import difflib
 import re
 
@@ -13,7 +13,18 @@ import numpy as np
 import pyaudio
 
 
-_WHISPER_MODELS: dict[str, object] = {}
+class _WhisperModel(Protocol):
+    def transcribe(
+        self,
+        audio: Any,
+        *,
+        fp16: bool,
+        language: str,
+        initial_prompt: str | None,
+    ) -> dict[str, Any]: ...
+
+
+_WHISPER_MODELS: dict[str, _WhisperModel] = {}
 
 
 def _rms(audio_chunk: bytes) -> float:
@@ -29,8 +40,13 @@ def record_until_silence(
     chunk: int = 1024,
     silence_seconds: float = 1.0,
     max_seconds: float = 15.0,
-    threshold: float = 500.0,
+    threshold: float | None = 500.0,
     input_device_index: int | None = None,
+    pre_roll_seconds: float = 0.35,
+    min_speech_seconds: float = 0.45,
+    auto_threshold: bool = False,
+    threshold_factor: float = 2.6,
+    threshold_floor: float = 180.0,
 ) -> None:
     """Record audio to a WAV file until silence is detected."""
     audio = pyaudio.PyAudio()
@@ -44,26 +60,55 @@ def record_until_silence(
     )
 
     frames: list[bytes] = []
+    pre_roll: list[bytes] = []
     silence_limit = int(silence_seconds * rate / chunk)
     max_chunks = int(max_seconds * rate / chunk)
+    pre_roll_limit = max(0, int(pre_roll_seconds * rate / chunk))
+    min_speech_chunks = max(0, int(min_speech_seconds * rate / chunk))
     silence_chunks = 0
     started = False
+    speech_chunks = 0
+
+    if auto_threshold:
+        # Calibrate on background noise before speech starts.
+        calibrate_chunks = max(1, int(0.35 * rate / chunk))
+        baseline: list[float] = []
+        for _ in range(min(calibrate_chunks, max_chunks)):
+            data = stream.read(chunk, exception_on_overflow=False)
+            baseline.append(_rms(data))
+            if pre_roll_limit:
+                pre_roll.append(data)
+                if len(pre_roll) > pre_roll_limit:
+                    pre_roll = pre_roll[-pre_roll_limit:]
+        noise = float(np.median(np.array(baseline, dtype=np.float32))) if baseline else 0.0
+        threshold = max(threshold_floor, noise * float(threshold_factor))
 
     try:
         for _ in range(max_chunks):
             data = stream.read(chunk, exception_on_overflow=False)
             volume = _rms(data)
 
-            if volume > threshold:
+            if not started and pre_roll_limit:
+                pre_roll.append(data)
+                if len(pre_roll) > pre_roll_limit:
+                    pre_roll = pre_roll[-pre_roll_limit:]
+
+            active_threshold = float(threshold or 0.0)
+            if volume > active_threshold:
                 started = True
+                if speech_chunks == 0 and pre_roll:
+                    frames.extend(pre_roll)
+                    pre_roll = []
                 silence_chunks = 0
                 frames.append(data)
+                speech_chunks += 1
                 continue
 
             if started:
                 frames.append(data)
+                speech_chunks += 1
                 silence_chunks += 1
-                if silence_chunks >= silence_limit:
+                if speech_chunks >= min_speech_chunks and silence_chunks >= silence_limit:
                     break
     finally:
         stream.stop_stream()
@@ -89,6 +134,16 @@ def _load_wav_mono_16k(path: str) -> np.ndarray:
     return samples / 32768.0
 
 
+def _wav_duration_seconds(path: str) -> float:
+    try:
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate() or 16000
+            frames = wf.getnframes() or 0
+        return float(frames) / float(rate)
+    except Exception:
+        return 0.0
+
+
 def transcribe_wav(
     path: str,
     model_name: str = "base",
@@ -106,7 +161,8 @@ def transcribe_wav(
     audio = _load_wav_mono_16k(path)
     model = _WHISPER_MODELS.get(model_name)
     if model is None:
-        model = whisper.load_model(model_name)
+        loaded = whisper.load_model(model_name)
+        model = cast(_WhisperModel, loaded)
         _WHISPER_MODELS[model_name] = model
     result = model.transcribe(
         audio,
@@ -181,13 +237,41 @@ def listen_and_transcribe(
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             temp_path = tmp.name
 
-        # A slightly higher silence threshold tends to help command-style speech.
-        threshold = float(os.getenv("VOICE_SILENCE_THRESHOLD", "650"))
+        auto_threshold = os.getenv("VOICE_AUTO_THRESHOLD", "1") == "1"
+        threshold = float(os.getenv("VOICE_SILENCE_THRESHOLD", "450"))
+        silence_seconds = float(os.getenv("VOICE_SILENCE_SECONDS", "0.8"))
+        max_seconds = float(os.getenv("VOICE_MAX_SECONDS", "12"))
+        pre_roll_seconds = float(os.getenv("VOICE_PRE_ROLL_SECONDS", "0.35"))
+        min_speech_seconds = float(os.getenv("VOICE_MIN_SPEECH_SECONDS", "0.45"))
+        threshold_factor = float(os.getenv("VOICE_THRESHOLD_FACTOR", "2.6"))
+        threshold_floor = float(os.getenv("VOICE_THRESHOLD_FLOOR", "180"))
+
+        if os.getenv("VOICE_DEBUG") == "1":
+            mode = "auto" if auto_threshold else "fixed"
+            print(
+                f"[voice] recording mode={mode} silence={silence_seconds}s max={max_seconds}s "
+                f"pre_roll={pre_roll_seconds}s min_speech={min_speech_seconds}s "
+                f"threshold={threshold if not auto_threshold else 'auto'}"
+            )
+
         record_until_silence(
             temp_path,
-            threshold=threshold,
+            silence_seconds=silence_seconds,
+            max_seconds=max_seconds,
+            threshold=None if auto_threshold else threshold,
             input_device_index=input_device_index,
+            pre_roll_seconds=pre_roll_seconds,
+            min_speech_seconds=min_speech_seconds,
+            auto_threshold=auto_threshold,
+            threshold_factor=threshold_factor,
+            threshold_floor=threshold_floor,
         )
+
+        dur = _wav_duration_seconds(temp_path)
+        if os.getenv("VOICE_DEBUG") == "1":
+            print(f"[voice] recorded {dur:.2f}s")
+        if dur < 0.25:
+            return ""
 
         prompt = (
             "You are a desktop assistant. Transcribe short commands like: "
