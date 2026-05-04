@@ -155,11 +155,30 @@ def create_schedule_from_text(
     day: str | None = None,
     path: str = DEFAULT_TRACKER_PATH,
     include_labels: bool = True,
+    use_reference: bool = False,
 ) -> str:
-    """Parse -> optimize -> store plan -> return formatted timeline."""
+    """Parse -> optimize -> store plan -> return formatted timeline.
+
+    If use_reference=True and a plan already exists for the day, merge the new
+    parsed tasks on top of the existing plan (new tasks override by name).
+    """
 
     day_key = day or _today_iso()
     parsed = parse_tasks(text)
+    if use_reference:
+        existing = load_plan(day_key, path=path)
+        existing_tasks = [t for t in (existing or {}).get("tasks", []) if isinstance(t, dict)]
+        if existing_tasks:
+            by_key: dict[str, dict[str, Any]] = {}
+            for t in existing_tasks:
+                k = _normalize_key(str(t.get("task") or ""))
+                if k:
+                    by_key[k] = dict(t)
+            for t in parsed:
+                k = _normalize_key(str(t.get("task") or ""))
+                if k:
+                    by_key[k] = dict(t)
+            parsed = list(by_key.values())
     blocks = optimize_day(parsed)
     save_plan(day=day_key, input_text=text, parsed_tasks=parsed, blocks=blocks, path=path)
     init_day(blocks, day=day_key, path=path)
@@ -267,6 +286,14 @@ def edit_schedule(
     cleaned = re.sub(r"^edit\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"^update\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"^change\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(
+        r"^edit\s+(the\s+)?(day\s+)?(plan|schedule)\s*[:\-]?\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(r"^update\s+(the\s+)?(day\s+)?(plan|schedule)\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^change\s+(the\s+)?(day\s+)?(plan|schedule)\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
     lowered = cleaned.lower().strip()
 
     def parse_time(text: str) -> str | None:
@@ -280,6 +307,19 @@ def edit_schedule(
             if ap == "pm":
                 h += 12
             return f"{h:02d}:{mm:02d}"
+        # Support dot time like 9.00
+        m = re.search(r"\b(\d{1,2})[\.:](\d{2})\b", text)
+        if m:
+            h = int(m.group(1))
+            mm = int(m.group(2))
+            if not (0 <= h <= 23 and 0 <= mm <= 59):
+                return None
+            if h <= 12:
+                if re.search(r"\b(morning|am)\b", text):
+                    h = 0 if h == 12 else h
+                elif re.search(r"\b(evening|night|pm)\b", text):
+                    h = 12 if h == 12 else h + 12
+            return f"{h:02d}:{mm:02d}"
         m = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
         if m:
             h = int(m.group(1))
@@ -287,6 +327,52 @@ def edit_schedule(
             if 0 <= h <= 23 and 0 <= mm <= 59:
                 return f"{h:02d}:{mm:02d}"
         return None
+
+    def duration_minutes(t: dict[str, Any]) -> int:
+        dur = str(t.get("duration") or "").strip().lower()
+        m = re.fullmatch(r"(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m)?", dur)
+        if m:
+            hours = int(m.group("h") or 0)
+            mins = int(m.group("m") or 0)
+            total = hours * 60 + mins
+            if total > 0:
+                return total
+
+        # If we have explicit start/end, compute duration.
+        start = t.get("time") or t.get("start")
+        end = t.get("end")
+        if start and end and isinstance(start, str) and isinstance(end, str) and ":" in start and ":" in end:
+            try:
+                sh, sm = start.split(":")
+                eh, em = end.split(":")
+                s = int(sh) * 60 + int(sm)
+                e = int(eh) * 60 + int(em)
+                if e > s:
+                    return e - s
+            except Exception:
+                pass
+
+        return 60
+
+    def hhmm_to_minutes(hhmm: str) -> int:
+        h, m = str(hhmm).split(":")
+        return int(h) * 60 + int(m)
+
+    def fixed_interval(t: dict[str, Any]) -> tuple[int, int] | None:
+        if t.get("type") != "fixed":
+            return None
+        start = t.get("time") or t.get("start")
+        if not start:
+            return None
+        try:
+            s = hhmm_to_minutes(str(start))
+        except Exception:
+            return None
+        dur = duration_minutes(t)
+        return (s, s + dur)
+
+    def overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
+        return a[0] < b[1] and b[0] < a[1]
 
     def find_task_index(name: str) -> int | None:
         key = _normalize_key(name)
@@ -346,15 +432,15 @@ def edit_schedule(
         if idx is None:
             return f"Couldn't find '{name}' in today's plan."
         tasks.pop(idx)
-    elif lowered.startswith("move ") or lowered.startswith("reschedule "):
-        m = re.search(r"^(move|reschedule)\s+(.+?)\s+(?:to|at|for)\s+(.+)$", lowered)
+    elif lowered.startswith(("move ", "reschedule ", "make ", "set ", "put ")):
+        m = re.search(r"^(move|reschedule|make|set|put)\s+(.+?)\s+(?:to|at|for)\s+(.+)$", lowered)
         if m:
             task_name = m.group(2).strip()
             time_str = parse_time(m.group(3))
         else:
             # Allow: "move gym 7pm" (no preposition)
             m2 = re.search(
-                r"^(move|reschedule)\s+(.+?)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})\b",
+                r"^(move|reschedule|make|set|put)\s+(.+?)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}[\.:]\d{2}|\d{1,2}:\d{2})\b",
                 lowered,
             )
             if not m2:
@@ -366,11 +452,30 @@ def edit_schedule(
         idx = find_task_index(task_name)
         if idx is None:
             return f"Couldn't find '{task_name}' in today's plan."
-        tasks[idx] = dict(tasks[idx])
-        tasks[idx]["type"] = "fixed"
-        tasks[idx]["time"] = time_str
-        tasks[idx].pop("start", None)
-        tasks[idx].pop("end", None)
+
+        # Prepare tentative move.
+        candidate = dict(tasks[idx])
+        candidate["type"] = "fixed"
+        candidate["time"] = time_str
+        candidate.pop("start", None)
+        candidate.pop("end", None)
+
+        cand_interval = fixed_interval(candidate)
+        if cand_interval is not None:
+            for j, other in enumerate(tasks):
+                if j == idx:
+                    continue
+                other_interval = fixed_interval(other)
+                if other_interval is None:
+                    continue
+                if overlaps(cand_interval, other_interval):
+                    other_name = str(other.get("task") or "another task").strip() or "another task"
+                    return (
+                        f"That time conflicts with '{other_name}'. "
+                        "Try a different time, or move the other task first."
+                    )
+
+        tasks[idx] = candidate
     else:
         return "Supported edits: add/remove/move. Examples: 'edit schedule: add study 1 chapter', 'edit schedule: remove gym', 'edit schedule: move gym to 7pm'."
 

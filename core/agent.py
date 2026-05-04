@@ -162,7 +162,9 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
     lowered = text.lower().strip()
 
     # Show schedule / timeline.
-    if re.search(r"\b(show|display)\b.*\b(schedule|plan|timeline|agenda)\b", lowered) or lowered in {
+    if (
+        re.search(r"\b(show|display)\b.*\b(schedule|plan|timeline|agenda)\b", lowered)
+        or lowered in {
         "schedule",
         "my schedule",
         "today schedule",
@@ -170,7 +172,9 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
         "show schedule",
         "show plan",
         "show timeline",
-    }:
+        }
+        or lowered in {"shwo", "shwo plan", "shwo schedule", "show"}
+    ):
         return {"intent": "show_schedule", "parameters": {}}
 
     # What's next.
@@ -178,12 +182,25 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
         return {"intent": "whats_next", "parameters": {}}
 
     # Edit schedule.
+    if lowered.startswith(("edit", "update", "change")) and re.search(
+        r"\b(schedule|plan|day\s+plan|timeline|agenda)\b", lowered
+    ):
+        return {"intent": "edit_schedule", "parameters": {"command": f"edit schedule: {text}"}}
+
     if lowered.startswith(("edit schedule", "update schedule", "change schedule")):
         return {"intent": "edit_schedule", "parameters": {"command": text}}
 
     # Schedule creation.
     if lowered.startswith(
         (
+            "create a new plan",
+            "create new plan",
+            "new plan",
+            "make a new plan",
+            "make new plan",
+            "create a new schedule",
+            "create new schedule",
+            "new schedule",
             "schedule my day",
             "schedule",
             "plan my day",
@@ -193,16 +210,33 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
             "plan",
         )
     ):
+        use_reference = bool(
+            has_plan()
+            and re.search(r"\b(new)\b", lowered)
+            and re.search(r"\b(plan|schedule)\b", lowered)
+        )
         stripped = re.sub(
-            r"^(schedule(\s+my\s+day)?|plan\s+my\s+day|make\s+a\s+schedule|make\s+my\s+schedule|plan)\s*[:\-]?\s*",
+            r"^(create\s+(a\s+)?new\s+(plan|schedule)|make\s+(a\s+)?new\s+(plan|schedule)|new\s+(plan|schedule)|schedule(\s+my\s+day)?|plan\s+my\s+day|make\s+a\s+schedule|make\s+my\s+schedule|plan)\s*[:\-]?\s*",
             "",
             text,
             flags=re.IGNORECASE,
         ).strip()
-        return {"intent": "create_schedule", "parameters": {"text": stripped or text}}
+
+        # Voice users often say: "create a new plan: move gym to 9am".
+        # That should be treated as an edit applied on top of the existing plan,
+        # not a brand-new task named "move gym".
+        if use_reference and stripped.lower().startswith(
+            ("move ", "reschedule ", "add ", "remove ", "make ", "set ", "put ")
+        ):
+            return {"intent": "edit_schedule", "parameters": {"command": f"edit schedule: {stripped}"}}
+
+        params: dict[str, object] = {"text": stripped or text}
+        if use_reference:
+            params["use_reference"] = True
+        return {"intent": "create_schedule", "parameters": params}
 
     # If there is already a plan and the user starts with a simple edit verb, assume edit.
-    if has_plan() and lowered.startswith(("add ", "remove ", "move ", "reschedule ")):
+    if has_plan() and lowered.startswith(("add ", "remove ", "move ", "reschedule ", "make ", "set ", "put ")):
         return {"intent": "edit_schedule", "parameters": {"command": f"edit schedule: {text}"}}
 
     return None
@@ -253,6 +287,12 @@ def process_text(user_text: str) -> str:
     parameters = payload.get("parameters") or {}
     if not isinstance(parameters, dict):
         parameters = {}
+
+    if intent in {"", "unknown"}:
+        return (
+            "I didn't understand that. Try: 'show schedule', 'what's next', "
+            "'schedule my day: ...', or 'edit schedule: move gym to 7pm'."
+        )
 
     def build_prompt_with_memory(prompt: str) -> str:
         if search_memory is None:

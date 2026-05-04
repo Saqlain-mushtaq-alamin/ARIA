@@ -12,6 +12,7 @@ import ollama
 SYSTEM_PROMPT = (
     "You are an intent classifier. "
     "Return ONLY a compact JSON object with keys: intent, parameters (optional), app (optional). "
+    "Do not include markdown, code blocks, explanations, lists, or extra keys. "
     "Use ONLY these intents: open_app, close_window, set_volume, get_clipboard, type_text, "
     "answer_question, type_generated_text, open_url, search_web, click_element, fill_form, extract_text, "
     "create_schedule, show_schedule, whats_next, edit_schedule. "
@@ -28,6 +29,49 @@ SYSTEM_PROMPT = (
     "For whats_next no parameters are required. "
     "For edit_schedule include parameters.command with the edit request."
 )
+
+
+def _try_extract_json_object(text: str) -> Dict[str, Any] | None:
+    """Best-effort extraction of the first valid JSON object from a messy model response."""
+
+    if not text:
+        return None
+
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = text[start : i + 1]
+                try:
+                    obj = json.loads(candidate)
+                except Exception:
+                    return None
+                return obj if isinstance(obj, dict) else None
+
+    return None
 
 
 def classify_intent(user_text: str, model: str = "llama3") -> Dict[str, Any]:
@@ -62,10 +106,10 @@ def classify_intent(user_text: str, model: str = "llama3") -> Dict[str, Any]:
 
     try:
         parsed = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Model did not return valid JSON: {content}") from exc
+        return parsed if isinstance(parsed, dict) else {"intent": "unknown", "parameters": {}, "app": None}
+    except json.JSONDecodeError:
+        extracted = _try_extract_json_object(content)
+        if extracted is not None:
+            return extracted
 
-    if not isinstance(parsed, dict):
-        raise ValueError("Model JSON must be an object")
-
-    return parsed
+    return {"intent": "unknown", "parameters": {}, "app": None}
