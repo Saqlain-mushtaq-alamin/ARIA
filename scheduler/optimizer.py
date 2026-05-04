@@ -133,9 +133,11 @@ def _preferred_effort(energy: str) -> str:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
-    day_start: str = "06:00"
+    # Sleep-aware default: don't plan from 6am unless you have early fixed tasks.
+    day_start: str = "08:00"
     day_end: str = "22:00"
     default_flexible_minutes: int = 60
+    break_minutes: int = 10
 
 
 def optimize_day(
@@ -179,6 +181,13 @@ def optimize_day(
         fixed_blocks.append((start, end, t))
 
     fixed_blocks.sort(key=lambda x: x[0])
+
+    # Expand the planning window to include any early/late fixed commitments.
+    if fixed_blocks:
+        earliest = min(s for s, _e, _t in fixed_blocks)
+        latest = max(e for _s, e, _t in fixed_blocks)
+        day_start_m = min(day_start_m, earliest)
+        day_end_m = max(day_end_m, latest)
 
     # Clip fixed blocks to the day window and drop those outside.
     clipped_fixed: list[tuple[int, int, dict[str, Any]]] = []
@@ -335,6 +344,22 @@ def optimize_day(
             planned_task["type"] = "flexible"
             plan_blocks.append((t_cursor, t_cursor + block_minutes, planned_task))
 
+            # Insert a short break after heavy work blocks when time allows.
+            is_heavy = _effort_bucket(planned_task) == "heavy"
+            is_work = _task_kind(planned_task) == "work"
+            break_m = int(cfg.break_minutes)
+            after_end = t_cursor + block_minutes
+            if is_heavy and is_work and block_minutes >= 60 and break_m > 0:
+                if after_end + break_m <= gap_end:
+                    plan_blocks.append(
+                        (
+                            after_end,
+                            after_end + break_m,
+                            {"task": "Break", "type": "break"},
+                        )
+                    )
+                    after_end += break_m
+
             # Reduce or remove task.
             if block_minutes >= dur:
                 flexible.pop(idx)
@@ -343,7 +368,7 @@ def optimize_day(
                 flexible[idx] = dict(task)
                 flexible[idx]["duration"] = _minutes_to_duration_str(dur - block_minutes)
 
-            t_cursor += block_minutes
+            t_cursor = after_end
 
     # Compose final schedule: fixed blocks + planned flexible blocks.
     all_blocks: list[tuple[int, int, dict[str, Any]]] = []

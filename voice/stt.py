@@ -129,6 +129,10 @@ def _postprocess_command(text: str) -> str:
 
     lower = cleaned.lower()
 
+    # Normalize common command variants.
+    lower = re.sub(r"\bset\s+volume\s+(?:at|to)\s+(\d{1,3})\b", r"set volume \1", lower)
+    lower = re.sub(r"\bchange\s+volume\s+(?:at|to)\s+(\d{1,3})\b", r"set volume \1", lower)
+
     # Common STT confusions for short commands.
     replacements = {
         "bad pad": "notepad",
@@ -141,6 +145,11 @@ def _postprocess_command(text: str) -> str:
     }
     for wrong, right in replacements.items():
         lower = re.sub(rf"\b{re.escape(wrong)}\b", right, lower)
+
+    # Map a few common spoken web targets into URLs.
+    lower = re.sub(r"^open\s+google\s+maps\b", "open https://maps.google.com", lower)
+    lower = re.sub(r"^open\s+maps\b", "open https://maps.google.com", lower)
+    lower = re.sub(r"^open\s+youtube\b", "open https://www.youtube.com", lower)
 
     # If the user said "open X" or "close X", fuzzy match X to known apps.
     try:
@@ -155,7 +164,7 @@ def _postprocess_command(text: str) -> str:
         verb = m.group(1)
         target = m.group(2).strip().rstrip(" .,!?:;")
         if target and target not in known and "." not in target:
-            best = difflib.get_close_matches(target, known, n=1, cutoff=0.78)
+            best = difflib.get_close_matches(target, known, n=1, cutoff=0.72)
             if best:
                 return f"{verb} {best[0]}"
 

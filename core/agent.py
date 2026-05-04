@@ -94,6 +94,15 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
     if match:
         target = match.group(2).strip().rstrip(" .,!?:;")
         target_lower = target.lower()
+
+        site_aliases = {
+            "google maps": "https://maps.google.com",
+            "maps": "https://maps.google.com",
+            "youtube": "https://www.youtube.com",
+            "gmail": "https://mail.google.com",
+        }
+        if target_lower in site_aliases:
+            return {"intent": "open_url", "parameters": {"url": site_aliases[target_lower], "use_chrome": True}}
         if target_lower.endswith(" app") and len(target_lower) > 4:
             return {
                 "intent": "open_app",
@@ -150,6 +159,27 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
     if match:
         url = match.group(1).strip()
         return {"intent": "extract_text", "parameters": {"url": url}}
+
+    return None
+
+
+def _parse_system_command(user_text: str) -> dict[str, object] | None:
+    text = (user_text or "").strip()
+    if not text:
+        return None
+    lowered = text.lower().strip()
+
+    # Volume.
+    m = re.match(r"^(set|change)\s+volume\s*(?:to|at)?\s*(\d{1,3})\b", lowered)
+    if m:
+        level = int(m.group(2))
+        level = max(0, min(100, level))
+        return {"intent": "set_volume", "parameters": {"level": level}}
+
+    m = re.match(r"^(mute|unmute)\b", lowered)
+    if m:
+        # Minimal: map mute to 0, unmute to 30.
+        return {"intent": "set_volume", "parameters": {"level": 0 if m.group(1) == "mute" else 30}}
 
     return None
 
@@ -252,7 +282,11 @@ def process_text(user_text: str) -> str:
 
     payload: dict[str, Any] = {}
 
-    parsed_payload = _parse_scheduler_command(user_text)
+    parsed_payload = _parse_system_command(user_text)
+    if isinstance(parsed_payload, dict):
+        payload = parsed_payload
+    else:
+        parsed_payload = _parse_scheduler_command(user_text)
     if isinstance(parsed_payload, dict):
         payload = parsed_payload
     else:

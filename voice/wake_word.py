@@ -68,10 +68,10 @@ def listen_for_wake_word(callback: Callable[[int], None]) -> None:
     print("Listening for wake word...")
 
     # Debounce / hysteresis to avoid missed detections and repeated triggers.
-    trigger_threshold = float(os.getenv("WAKEWORD_TRIGGER_THRESHOLD", "0.50"))
+    trigger_threshold = float(os.getenv("WAKEWORD_TRIGGER_THRESHOLD", "0.45"))
     reset_threshold = float(os.getenv("WAKEWORD_RESET_THRESHOLD", "0.20"))
-    required_hits = int(os.getenv("WAKEWORD_REQUIRED_HITS", "3"))
-    cooldown_seconds = float(os.getenv("WAKEWORD_COOLDOWN_SECONDS", "1.5"))
+    required_hits = int(os.getenv("WAKEWORD_REQUIRED_HITS", "2"))
+    cooldown_seconds = float(os.getenv("WAKEWORD_COOLDOWN_SECONDS", "1.2"))
 
     consecutive_hits = 0
     armed = True
