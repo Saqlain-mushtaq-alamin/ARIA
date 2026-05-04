@@ -80,6 +80,40 @@ def _effort_bucket(task: dict[str, Any]) -> str:
     return "medium"
 
 
+def _task_kind(task: dict[str, Any]) -> str:
+    name = str(task.get("task", "")).lower()
+
+    if any(k in name for k in ("gym", "workout", "run", "walk", "exercise")):
+        return "health"
+    if any(k in name for k in ("meeting", "call", "email", "emails", "appointment", "errand", "admin")):
+        return "admin"
+    if any(k in name for k in ("hang out", "hangout", "friend", "friends", "party", "date")):
+        return "social"
+    if any(k in name for k in ("movie", "watch", "netflix", "youtube", "game", "gaming", "entertain")):
+        return "entertainment"
+    return "work"
+
+
+def _preferred_windows(kind: str) -> list[tuple[int, int]]:
+    """Preferred windows for different kinds of tasks (minutes since midnight)."""
+
+    if kind == "work":
+        return [(8 * 60, 12 * 60), (13 * 60, 17 * 60)]
+    if kind == "admin":
+        return [(9 * 60, 12 * 60), (14 * 60, 17 * 60)]
+    if kind == "health":
+        return [(6 * 60, 9 * 60), (17 * 60, 20 * 60)]
+    if kind == "social":
+        return [(16 * 60, 20 * 60)]
+    if kind == "entertainment":
+        return [(19 * 60, 22 * 60)]
+    return [(8 * 60, 17 * 60)]
+
+
+def _in_any_window(t: int, windows: list[tuple[int, int]]) -> bool:
+    return any(start <= t < end for start, end in windows)
+
+
 def _energy_for_time(mins: int) -> str:
     # Simple day energy curve.
     if 8 * 60 <= mins < 12 * 60:
@@ -178,6 +212,32 @@ def optimize_day(
             return (2, start)  # after last fixed
 
         free.sort(key=free_rank)
+    else:
+        # No fixed tasks: schedule by day segments to better match human energy
+        # and task kinds (work/admin in morning, social/entertainment later).
+        segs = [
+            (8 * 60, 12 * 60),
+            (13 * 60, 17 * 60),
+            (17 * 60, 22 * 60),
+            (day_start_m, 8 * 60),
+            (12 * 60, 13 * 60),
+        ]
+
+        def intersect(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int] | None:
+            s = max(a[0], b[0])
+            e = min(a[1], b[1])
+            return (s, e) if e > s else None
+
+        new_free: list[tuple[int, int]] = []
+        for seg in segs:
+            for f in free:
+                inter = intersect(seg, f)
+                if inter is not None:
+                    new_free.append(inter)
+
+        # Fall back if something went wrong.
+        if new_free:
+            free = new_free
 
     # Sort flexible by deadline first, then longer (so big tasks get a chance).
     flexible.sort(
@@ -193,19 +253,76 @@ def optimize_day(
     def pick_task(current_time: int) -> int | None:
         if not flexible:
             return None
-        energy = _energy_for_time(current_time)
-        preferred = _preferred_effort(energy)
 
-        # 1) Try to match preferred effort bucket.
+        energy = _energy_for_time(current_time)
+        preferred_effort = _preferred_effort(energy)
+
+        best_idx: int | None = None
+        best_score = -10**9
+
         for idx, t in enumerate(flexible):
-            if _effort_bucket(t) == preferred:
-                return idx
-        # 2) Otherwise earliest deadline.
-        return 0
+            score = 0
+
+            # Deadline pressure.
+            score -= _deadline_rank(t.get("deadline"))
+
+            # Energy/effort alignment.
+            effort = _effort_bucket(t)
+            if effort == preferred_effort:
+                score += 20
+            elif preferred_effort == "high" and effort == "medium":
+                score += 8
+            elif preferred_effort == "medium" and effort in {"heavy", "light"}:
+                score += 2
+
+            # Time-of-day suitability by kind.
+            kind = _task_kind(t)
+            windows = _preferred_windows(kind)
+            if _in_any_window(current_time, windows):
+                score += 25
+            else:
+                # Penalize scheduling far outside preferred windows.
+                if current_time < windows[0][0]:
+                    score -= 12  # too early
+                elif current_time >= windows[-1][1]:
+                    score -= 6  # too late
+                else:
+                    score -= 4
+
+            # Small preference: longer tasks earlier so they don't get squeezed.
+            score += (_parse_duration_to_minutes(t.get("duration")) or cfg.default_flexible_minutes) // 30
+
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        return best_idx
 
     for gap_start, gap_end in free:
         t_cursor = gap_start
         while t_cursor < gap_end and flexible:
+            # If nothing prefers the current time-of-day, jump forward to the next
+            # preferred window start (prevents forcing entertainment/social too early).
+            any_in_window = False
+            next_start: int | None = None
+            for t in flexible:
+                windows = _preferred_windows(_task_kind(t))
+                if _in_any_window(t_cursor, windows):
+                    any_in_window = True
+                    break
+                candidate = windows[0][0]
+                if candidate > t_cursor:
+                    next_start = candidate if next_start is None else min(next_start, candidate)
+
+            if not any_in_window and next_start is not None:
+                if next_start < gap_end:
+                    t_cursor = max(t_cursor, next_start)
+                    continue
+                # If this gap ends before any preferred window starts, skip this gap
+                # unless it's the final gap of the day.
+                if gap_end < day_end_m:
+                    break
+
             idx = pick_task(t_cursor)
             if idx is None:
                 break

@@ -33,7 +33,7 @@ _TIME_WORD_RE = re.compile(r"\b(noon|midnight)\b", re.IGNORECASE)
 
 # Common "glue" prefixes users add before tasks.
 _PREFIX_RE = re.compile(
-    r"^\s*(i\s+(have|got|need|need\s+to|must|have\s+to)|need\s+to|have\s+to|must|please|can\s+you|could\s+you|today\s+i\s+need\s+to)\s+",
+    r"^\s*(i\s+(have\s+to|need\s+to|have|got|need|must)|need\s+to|have\s+to|must|please|can\s+you|could\s+you|today\s+i\s+need\s+to|i\s+want\s+to|i\s+wanna|i\s+would\s+like\s+to|i\s*'d\s+like\s+to)\s+",
     re.IGNORECASE,
 )
 
@@ -44,7 +44,7 @@ _LEADING_VERB_RE = re.compile(
 )
 
 # Splitting heuristic: commas / semicolons / "and" between items.
-_SPLIT_RE = re.compile(r"\s*(?:,|;|\band\b|\bthen\b)\s*", re.IGNORECASE)
+_SPLIT_RE = re.compile(r"\s*(?:,|;|\band\b|\bthen\b|\balso\b)\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -265,8 +265,10 @@ def _clean_task_name(segment: str) -> str:
         flags=re.IGNORECASE,
     ).strip()
 
-    # Remove leading verbs.
-    s = _LEADING_VERB_RE.sub("", s).strip()
+    # Remove leading verbs, but don't erase the whole task.
+    stripped = _LEADING_VERB_RE.sub("", s).strip()
+    if stripped and stripped not in {"to", "for", "and"}:
+        s = stripped
 
     # Cleanup dangling punctuation/extra words.
     s = re.sub(r"\s+", " ", s).strip(" -.:\t\n")

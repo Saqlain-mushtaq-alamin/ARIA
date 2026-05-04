@@ -195,6 +195,9 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
         (
             "create a new plan",
             "create new plan",
+            "create a new day plan",
+            "create new day plan",
+            "create day plan",
             "new plan",
             "make a new plan",
             "make new plan",
@@ -216,7 +219,7 @@ def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
             and re.search(r"\b(plan|schedule)\b", lowered)
         )
         stripped = re.sub(
-            r"^(create\s+(a\s+)?new\s+(plan|schedule)|make\s+(a\s+)?new\s+(plan|schedule)|new\s+(plan|schedule)|schedule(\s+my\s+day)?|plan\s+my\s+day|make\s+a\s+schedule|make\s+my\s+schedule|plan)\s*[:\-]?\s*",
+            r"^(create\s+(a\s+)?new\s+((day\s+)?plan|schedule)|create\s+day\s+plan|make\s+(a\s+)?new\s+((day\s+)?plan|schedule)|new\s+((day\s+)?plan|schedule)|schedule(\s+my\s+day)?|plan\s+my\s+day|make\s+a\s+schedule|make\s+my\s+schedule|plan)\s*[:\-]?\s*",
             "",
             text,
             flags=re.IGNORECASE,

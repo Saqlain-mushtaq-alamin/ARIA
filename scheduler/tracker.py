@@ -170,10 +170,12 @@ def create_schedule_from_text(
         existing_tasks = [t for t in (existing or {}).get("tasks", []) if isinstance(t, dict)]
         if existing_tasks:
             by_key: dict[str, dict[str, Any]] = {}
+            # Keep only fixed commitments from the previous plan.
             for t in existing_tasks:
-                k = _normalize_key(str(t.get("task") or ""))
-                if k:
-                    by_key[k] = dict(t)
+                if t.get("type") == "fixed" and t.get("time"):
+                    k = _normalize_key(str(t.get("task") or ""))
+                    if k:
+                        by_key[k] = dict(t)
             for t in parsed:
                 k = _normalize_key(str(t.get("task") or ""))
                 if k:
@@ -374,6 +376,34 @@ def edit_schedule(
     def overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
         return a[0] < b[1] and b[0] < a[1]
 
+    def nearest_free_start(
+        desired_start: int,
+        dur: int,
+        busy: list[tuple[int, int]],
+        *,
+        day_start: int = 6 * 60,
+        day_end: int = 22 * 60,
+        step: int = 15,
+    ) -> int | None:
+        """Find the nearest non-overlapping start time in step-minute increments."""
+
+        def ok(s: int) -> bool:
+            if s < day_start or s + dur > day_end:
+                return False
+            interval = (s, s + dur)
+            return all(not overlaps(interval, b) for b in busy)
+
+        if ok(desired_start):
+            return desired_start
+
+        max_radius = day_end - day_start
+        for r in range(step, max_radius + step, step):
+            # Try after then before (keeps schedule moving forward).
+            for cand in (desired_start + r, desired_start - r):
+                if ok(cand):
+                    return cand
+        return None
+
     def find_task_index(name: str) -> int | None:
         key = _normalize_key(name)
         if not key:
@@ -462,18 +492,48 @@ def edit_schedule(
 
         cand_interval = fixed_interval(candidate)
         if cand_interval is not None:
+            # Build busy intervals excluding the moved task itself.
+            busy: list[tuple[int, int]] = []
+            fixed_indices: list[int] = []
             for j, other in enumerate(tasks):
                 if j == idx:
                     continue
                 other_interval = fixed_interval(other)
                 if other_interval is None:
                     continue
-                if overlaps(cand_interval, other_interval):
+                busy.append(other_interval)
+                fixed_indices.append(j)
+
+            # If the candidate conflicts, aggressively relocate the other fixed task(s).
+            conflicts = []
+            for j in fixed_indices:
+                other_interval = fixed_interval(tasks[j])
+                if other_interval is not None and overlaps(cand_interval, other_interval):
+                    conflicts.append(j)
+
+            # Reserve the moved task time first.
+            busy_with_candidate = busy + [cand_interval]
+
+            for j in conflicts:
+                other = dict(tasks[j])
+                other_interval = fixed_interval(other)
+                if other_interval is None:
+                    continue
+
+                dur = duration_minutes(other)
+                original_start = other_interval[0]
+                new_start = nearest_free_start(original_start, dur, busy_with_candidate)
+                if new_start is None:
                     other_name = str(other.get("task") or "another task").strip() or "another task"
-                    return (
-                        f"That time conflicts with '{other_name}'. "
-                        "Try a different time, or move the other task first."
-                    )
+                    return f"Couldn't find a free slot to move '{other_name}'."
+
+                other["type"] = "fixed"
+                other["time"] = f"{new_start // 60:02d}:{new_start % 60:02d}"
+                other.pop("start", None)
+                other.pop("end", None)
+                tasks[j] = other
+                # Update busy list with the moved interval.
+                busy_with_candidate.append((new_start, new_start + dur))
 
         tasks[idx] = candidate
     else:
