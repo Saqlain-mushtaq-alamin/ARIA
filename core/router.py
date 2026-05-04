@@ -6,6 +6,8 @@ from typing import Any, Callable, Dict
 
 from modules import browser_agent, system_control
 
+from scheduler.tracker import create_schedule_from_text, edit_schedule, show_schedule, whats_next
+
 
 INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "open_app": system_control.open_app,
@@ -18,6 +20,12 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "click_element": browser_agent.click_element,
     "fill_form": browser_agent.fill_form,
     "extract_text": browser_agent.extract_text,
+
+    # Scheduler
+    "create_schedule": create_schedule_from_text,
+    "show_schedule": show_schedule,
+    "whats_next": whats_next,
+    "edit_schedule": edit_schedule,
 }
 
 INTENT_ALIASES = {
@@ -43,6 +51,16 @@ INTENT_ALIASES = {
     "click": "click_element",
     "form_fill": "fill_form",
     "extract": "extract_text",
+
+    # Scheduler aliases
+    "schedule": "create_schedule",
+    "plan_day": "create_schedule",
+    "make_schedule": "create_schedule",
+    "show_plan": "show_schedule",
+    "show_timeline": "show_schedule",
+    "next_task": "whats_next",
+    "what_next": "whats_next",
+    "edit_plan": "edit_schedule",
 }
 
 

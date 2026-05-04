@@ -12,6 +12,7 @@ from langchain_core.tools import Tool
 from core.router import dispatch_intent
 from modules.content_generator import generate_text
 from modules import browser_agent, system_control
+from scheduler.tracker import has_plan
 from safety.confirmation_engine import confirm_action, requires_confirmation
 from safety.harm_classifier import blocked_response, is_blocked
 from .intent_classifier import classify_intent
@@ -153,22 +154,81 @@ def _parse_browser_command(user_text: str) -> dict[str, object] | None:
     return None
 
 
+def _parse_scheduler_command(user_text: str) -> dict[str, object] | None:
+    text = (user_text or "").strip()
+    if not text:
+        return None
+
+    lowered = text.lower().strip()
+
+    # Show schedule / timeline.
+    if re.search(r"\b(show|display)\b.*\b(schedule|plan|timeline|agenda)\b", lowered) or lowered in {
+        "schedule",
+        "my schedule",
+        "today schedule",
+        "today's schedule",
+        "show schedule",
+        "show plan",
+        "show timeline",
+    }:
+        return {"intent": "show_schedule", "parameters": {}}
+
+    # What's next.
+    if re.search(r"\b(what'?s\s+next|what\s+should\s+i\s+do\s+next|next\s+task|what\s+now)\b", lowered):
+        return {"intent": "whats_next", "parameters": {}}
+
+    # Edit schedule.
+    if lowered.startswith(("edit schedule", "update schedule", "change schedule")):
+        return {"intent": "edit_schedule", "parameters": {"command": text}}
+
+    # Schedule creation.
+    if lowered.startswith(
+        (
+            "schedule my day",
+            "schedule",
+            "plan my day",
+            "make a schedule",
+            "make my schedule",
+            "plan:",
+            "plan",
+        )
+    ):
+        stripped = re.sub(
+            r"^(schedule(\s+my\s+day)?|plan\s+my\s+day|make\s+a\s+schedule|make\s+my\s+schedule|plan)\s*[:\-]?\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        return {"intent": "create_schedule", "parameters": {"text": stripped or text}}
+
+    # If there is already a plan and the user starts with a simple edit verb, assume edit.
+    if has_plan() and lowered.startswith(("add ", "remove ", "move ", "reschedule ")):
+        return {"intent": "edit_schedule", "parameters": {"command": f"edit schedule: {text}"}}
+
+    return None
+
+
 def process_text(user_text: str) -> str:
     """Process user input and return a response string."""
     if not user_text.strip():
         return "No input received"
 
     payload: dict[str, Any] = {}
-    parsed_payload = _parse_browser_command(user_text)
+
+    parsed_payload = _parse_scheduler_command(user_text)
     if isinstance(parsed_payload, dict):
         payload = parsed_payload
     else:
-        try:
-            classified_payload = classify_intent(user_text)
-        except Exception as exc:
-            return f"Failed to classify intent: {exc}"
-        if isinstance(classified_payload, dict):
-            payload = classified_payload
+        parsed_payload = _parse_browser_command(user_text)
+        if isinstance(parsed_payload, dict):
+            payload = parsed_payload
+        else:
+            try:
+                classified_payload = classify_intent(user_text)
+            except Exception as exc:
+                return f"Failed to classify intent: {exc}"
+            if isinstance(classified_payload, dict):
+                payload = classified_payload
 
     if payload.get("intent") == "open_app":
         params = payload.get("parameters") or {}

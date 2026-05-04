@@ -13,7 +13,8 @@ SYSTEM_PROMPT = (
     "You are an intent classifier. "
     "Return ONLY a compact JSON object with keys: intent, parameters (optional), app (optional). "
     "Use ONLY these intents: open_app, close_window, set_volume, get_clipboard, type_text, "
-    "answer_question, type_generated_text, open_url, search_web, click_element, fill_form, extract_text. "
+    "answer_question, type_generated_text, open_url, search_web, click_element, fill_form, extract_text, "
+    "create_schedule, show_schedule, whats_next, edit_schedule. "
     "For open/close actions include parameters.app_name. "
     "For volume changes include parameters.level as a number. "
     "For answer_question and type_generated_text include parameters.prompt with the full request. "
@@ -21,7 +22,11 @@ SYSTEM_PROMPT = (
     "For search_web include parameters.query and optional parameters.engine (google or duckduckgo). "
     "For click_element include parameters.selector. "
     "For fill_form include parameters.url, parameters.fields (object), and optional parameters.submit. "
-    "For extract_text include parameters.url and optional parameters.max_chars."
+    "For extract_text include parameters.url and optional parameters.max_chars. "
+    "For create_schedule include parameters.text with the user's schedule sentence. "
+    "For show_schedule no parameters are required. "
+    "For whats_next no parameters are required. "
+    "For edit_schedule include parameters.command with the edit request."
 )
 
 

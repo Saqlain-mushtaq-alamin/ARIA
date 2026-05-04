@@ -18,6 +18,10 @@ import os
 import re
 from typing import Any
 
+from scheduler.optimizer import optimize_day
+from scheduler.routine_generator import format_timeline
+from scheduler.task_parser import parse_tasks
+
 
 DEFAULT_TRACKER_PATH = os.getenv(
     "TASK_TRACKER_PATH",
@@ -46,17 +50,18 @@ def _atomic_write_json(path: str, data: Any) -> None:
 
 def load_state(path: str = DEFAULT_TRACKER_PATH) -> dict[str, Any]:
     if not os.path.exists(path):
-        return {"tasks": {}, "habits": {}}
+        return {"tasks": {}, "habits": {}, "plans": {}}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            return {"tasks": {}, "habits": {}}
+            return {"tasks": {}, "habits": {}, "plans": {}}
         data.setdefault("tasks", {})
         data.setdefault("habits", {})
+        data.setdefault("plans", {})
         return data
     except Exception:
-        return {"tasks": {}, "habits": {}}
+        return {"tasks": {}, "habits": {}, "plans": {}}
 
 
 def save_state(state: dict[str, Any], path: str = DEFAULT_TRACKER_PATH) -> None:
@@ -107,6 +112,272 @@ def init_day(
 
     save_state(state, path)
     return state
+
+
+def save_plan(
+    *,
+    day: str | None = None,
+    input_text: str | None = None,
+    parsed_tasks: list[dict[str, Any]] | None = None,
+    blocks: list[dict[str, Any]] | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> dict[str, Any]:
+    """Persist a full daily plan (source tasks + optimized blocks)."""
+
+    day_key = day or _today_iso()
+    state = load_state(path)
+    plans: dict[str, Any] = state.setdefault("plans", {})
+    plans[day_key] = {
+        "input": input_text or "",
+        "tasks": list(parsed_tasks or []),
+        "blocks": list(blocks or []),
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    save_state(state, path)
+    return state
+
+
+def load_plan(day: str | None = None, *, path: str = DEFAULT_TRACKER_PATH) -> dict[str, Any] | None:
+    day_key = day or _today_iso()
+    state = load_state(path)
+    plans: dict[str, Any] = state.get("plans", {}) or {}
+    plan = plans.get(day_key)
+    return plan if isinstance(plan, dict) else None
+
+
+def has_plan(day: str | None = None, *, path: str = DEFAULT_TRACKER_PATH) -> bool:
+    return load_plan(day, path=path) is not None
+
+
+def create_schedule_from_text(
+    text: str,
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+    include_labels: bool = True,
+) -> str:
+    """Parse -> optimize -> store plan -> return formatted timeline."""
+
+    day_key = day or _today_iso()
+    parsed = parse_tasks(text)
+    blocks = optimize_day(parsed)
+    save_plan(day=day_key, input_text=text, parsed_tasks=parsed, blocks=blocks, path=path)
+    init_day(blocks, day=day_key, path=path)
+    return format_timeline(blocks, include_labels=include_labels)
+
+
+def get_schedule_blocks(day: str | None = None, *, path: str = DEFAULT_TRACKER_PATH) -> list[dict[str, Any]]:
+    """Return the stored optimized blocks for the day, if available."""
+
+    plan = load_plan(day, path=path)
+    if plan and isinstance(plan.get("blocks"), list):
+        return [b for b in plan.get("blocks") if isinstance(b, dict)]
+
+    # Fallback: reconstruct from stored day tasks.
+    day_key = day or _today_iso()
+    state = load_state(path)
+    day_tasks: dict[str, Any] = (state.get("tasks") or {}).get(day_key) or {}
+    blocks: list[dict[str, Any]] = []
+    for obj in day_tasks.values():
+        task = str(obj.get("task") or "").strip()
+        start = obj.get("start")
+        end = obj.get("end")
+        if task and start and end:
+            blocks.append({"task": task, "type": obj.get("type") or "flexible", "start": start, "end": end})
+    blocks.sort(key=lambda b: (str(b.get("start") or "00:00"), str(b.get("end") or "00:00")))
+    return blocks
+
+
+def show_schedule(
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+    include_labels: bool = True,
+) -> str:
+    blocks = get_schedule_blocks(day, path=path)
+    if not blocks:
+        return "No schedule found. Say: 'schedule my day: ...'"
+    return format_timeline(blocks, include_labels=include_labels)
+
+
+def whats_next(
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> str:
+    blocks = get_schedule_blocks(day, path=path)
+    if not blocks:
+        return "No schedule found. Say: 'schedule my day: ...'"
+
+    now = datetime.now()
+    now_m = now.hour * 60 + now.minute
+
+    def to_mins(hhmm: str) -> int:
+        try:
+            h, m = str(hhmm).split(":")
+            return int(h) * 60 + int(m)
+        except Exception:
+            return 0
+
+    # If we're currently inside a block, return it as "Now".
+    for b in blocks:
+        s = to_mins(b.get("start"))
+        e = to_mins(b.get("end"))
+        if s <= now_m < e:
+            return f"Now: {b.get('start')} – {b.get('end')}  {b.get('task')}"
+
+    # Otherwise, find next upcoming.
+    upcoming = [b for b in blocks if to_mins(b.get("start")) > now_m]
+    if not upcoming:
+        return "You're done for the day (no more scheduled blocks)."
+
+    next_b = sorted(upcoming, key=lambda b: to_mins(b.get("start")))[0]
+    return f"Next: {next_b.get('start')} – {next_b.get('end')}  {next_b.get('task')}"
+
+
+def edit_schedule(
+    command: str,
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+    include_labels: bool = True,
+) -> str:
+    """Edit the stored plan using a simple command language.
+
+    Supported:
+      - add <task> [at <time>]
+      - remove <task>
+      - move <task> to <time>
+      - reschedule <task> to <time>
+
+    After edits, the day is re-optimized and stored.
+    """
+
+    day_key = day or _today_iso()
+    plan = load_plan(day_key, path=path)
+    if not plan:
+        return "No schedule found to edit. First say: 'schedule my day: ...'"
+
+    tasks = [t for t in (plan.get("tasks") or []) if isinstance(t, dict)]
+    raw = str(command or "").strip()
+    if not raw:
+        return "Tell me what to change. Example: 'edit schedule: move gym to 7pm'"
+
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^edit\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^update\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^change\s+schedule\s*[:\-]?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    lowered = cleaned.lower().strip()
+
+    def parse_time(text: str) -> str | None:
+        m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text)
+        if m:
+            h = int(m.group(1))
+            mm = int(m.group(2) or 0)
+            ap = m.group(3)
+            if h == 12:
+                h = 0
+            if ap == "pm":
+                h += 12
+            return f"{h:02d}:{mm:02d}"
+        m = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
+        if m:
+            h = int(m.group(1))
+            mm = int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mm <= 59:
+                return f"{h:02d}:{mm:02d}"
+        return None
+
+    def find_task_index(name: str) -> int | None:
+        key = _normalize_key(name)
+        if not key:
+            return None
+
+        stop = {
+            "the",
+            "a",
+            "an",
+            "my",
+            "today",
+            "this",
+            "task",
+            "plan",
+            "schedule",
+        }
+        key_tokens = [t for t in key.split() if t and t not in stop]
+
+        best: int | None = None
+        best_score = -1
+        for i, t in enumerate(tasks):
+            tname = _normalize_key(str(t.get("task") or ""))
+            if not tname:
+                continue
+            if key == tname:
+                return i
+
+            # Substring match.
+            if key in tname or tname in key:
+                score = 1000 + min(len(key), len(tname))
+                if score > best_score:
+                    best_score = score
+                    best = i
+                continue
+
+            # Token overlap for noisy voice transcripts.
+            t_tokens = [tt for tt in tname.split() if tt and tt not in stop]
+            overlap = len(set(key_tokens) & set(t_tokens))
+            if overlap:
+                score = overlap * 10 + min(len(key), len(tname))
+                if score > best_score:
+                    best_score = score
+                    best = i
+
+        return best
+
+    if lowered.startswith("add "):
+        frag = cleaned[4:].strip()
+        new_tasks = parse_tasks(frag)
+        if not new_tasks:
+            return "Couldn't parse what to add. Example: 'edit schedule: add study 1 chapter'"
+        tasks.extend(new_tasks)
+    elif lowered.startswith("remove "):
+        name = cleaned[7:].strip()
+        idx = find_task_index(name)
+        if idx is None:
+            return f"Couldn't find '{name}' in today's plan."
+        tasks.pop(idx)
+    elif lowered.startswith("move ") or lowered.startswith("reschedule "):
+        m = re.search(r"^(move|reschedule)\s+(.+?)\s+(?:to|at|for)\s+(.+)$", lowered)
+        if m:
+            task_name = m.group(2).strip()
+            time_str = parse_time(m.group(3))
+        else:
+            # Allow: "move gym 7pm" (no preposition)
+            m2 = re.search(
+                r"^(move|reschedule)\s+(.+?)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})\b",
+                lowered,
+            )
+            if not m2:
+                return "Try: 'edit schedule: move gym to 7pm'"
+            task_name = m2.group(2).strip()
+            time_str = parse_time(m2.group(3))
+        if not time_str:
+            return "I couldn't read the new time. Example: '7pm' or '19:00'."
+        idx = find_task_index(task_name)
+        if idx is None:
+            return f"Couldn't find '{task_name}' in today's plan."
+        tasks[idx] = dict(tasks[idx])
+        tasks[idx]["type"] = "fixed"
+        tasks[idx]["time"] = time_str
+        tasks[idx].pop("start", None)
+        tasks[idx].pop("end", None)
+    else:
+        return "Supported edits: add/remove/move. Examples: 'edit schedule: add study 1 chapter', 'edit schedule: remove gym', 'edit schedule: move gym to 7pm'."
+
+    blocks = optimize_day(tasks)
+    save_plan(day=day_key, input_text=str(plan.get("input") or ""), parsed_tasks=tasks, blocks=blocks, path=path)
+    init_day(blocks, day=day_key, path=path)
+    return format_timeline(blocks, include_labels=include_labels)
 
 
 def _clean_completion_phrase(user_text: str) -> str:
