@@ -31,12 +31,15 @@ import math
 import numpy as np
 from collections import deque
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.request import urlretrieve
 
-# Local imports
-from gesture_mapper import GESTURES, Thresholds, print_gesture_map
+# Local imports (support both script-run and package import)
+try:
+    from .gesture_mapper import GESTURES, Thresholds, print_gesture_map
+except ImportError:  # pragma: no cover
+    from gesture_mapper import GESTURES, Thresholds, print_gesture_map
 
 # ══════════════════════════════════════════════════════════
 #  CONSTANTS
@@ -78,7 +81,9 @@ LM = {
     "IDX_TIP":    8,
     "MID_MCP":    9,
     "MID_TIP":    12,
+    "RNG_PIP":    14,
     "RNG_TIP":    16,
+    "PINKY_MCP":  17,
     "PINKY_TIP":  20,
 }
 
@@ -154,6 +159,7 @@ class GestureState:
             "LEFT_CLICK":  False,
             "RIGHT_CLICK": False,
             "GO_BACK":     False,
+            "GO_FORWARD":  False,
             "SCROLL_MODE": False,
         }
 
@@ -242,6 +248,7 @@ GESTURE_COLORS = {
     "RIGHT_CLICK": (0, 120, 255),
     "SCROLL_MODE": (255, 180, 0),
     "GO_BACK":     (180, 0, 255),
+    "GO_FORWARD":  (0, 180, 255),
     "SWIPE_LEFT":  (255, 60, 60),
     "SWIPE_RIGHT": (60, 60, 255),
     "CLICK_DRAG":  (0, 255, 220),
@@ -275,7 +282,8 @@ def draw_hud(frame: np.ndarray, active_gesture: str,
         ("4+12=LClick", GESTURE_COLORS["LEFT_CLICK"]),
         ("4+16=RClick", GESTURE_COLORS["RIGHT_CLICK"]),
         ("8+12+swipe=Scroll", GESTURE_COLORS["SCROLL_MODE"]),
-        ("4+5=Back", GESTURE_COLORS["GO_BACK"]),
+        ("4+17=Back", GESTURE_COLORS["GO_BACK"]),
+        ("4+14=Fwd", GESTURE_COLORS["GO_FORWARD"]),
         ("Palm swipe=Nav", GESTURE_COLORS["SWIPE_LEFT"]),
     ]
     bar_y = h - 26
@@ -357,6 +365,7 @@ def run_controller() -> None:
         fps_deque.append(1.0 / max(t_now - t_prev, 1e-6))
         t_prev = t_now
         fps = float(np.mean(fps_deque))
+        dt = 1.0 / max(fps, 1e-6)
 
         timestamp_ms = int((t_now - stream_t0) * 1000)
         result = landmarker.detect_for_video(mp_image, timestamp_ms)
@@ -405,6 +414,12 @@ def run_controller() -> None:
             # Midpoint y of index+middle tip pair
             my = (lms[LM["IDX_TIP"]].y + lms[LM["MID_TIP"]].y) / 2
 
+            # Anchor on entry. While held, scroll speed depends on how far the
+            # hand is from the anchor (like holding mouse-wheel and moving).
+            if state.scroll_ref_y is None:
+                state.scroll_ref_y = my
+                state.scroll_accumulator = 0.0
+
             # ── Click-drag scroll (left-click HELD + scroll) ──
             if state.is_pinch_held("LEFT_CLICK"):
                 # Rare multi-select mode: hold mouse button while scrolling
@@ -412,19 +427,16 @@ def run_controller() -> None:
                     pyautogui.mouseDown()
                     state.mouse_held = True
                 active_gesture = "CLICK_DRAG"
-                # Scroll while dragging
-                if state.scroll_ref_y is not None:
-                    delta_y = state.scroll_ref_y - my   # up = positive
-                    state.scroll_accumulator += delta_y
-                    if abs(state.scroll_accumulator) > \
-                       Thresholds.SCROLL_DEADZONE * 3:
-                        clicks = int(state.scroll_accumulator * \
-                                     Thresholds.SCROLL_SENSITIVITY)
-                        if clicks != 0:
-                            pyautogui.scroll(clicks)
-                            state.scroll_accumulator -= clicks / \
-                                                        Thresholds.SCROLL_SENSITIVITY
-                state.scroll_ref_y = my
+                offset_y = state.scroll_ref_y - my  # up = positive
+                if abs(offset_y) > Thresholds.SCROLL_DEADZONE * 3:
+                    # Scroll rate is continuous while held; scale by dt.
+                    state.scroll_accumulator += (
+                        offset_y * Thresholds.SCROLL_SENSITIVITY * dt * 3
+                    )
+                    clicks = int(state.scroll_accumulator)
+                    if clicks != 0:
+                        pyautogui.scroll(clicks)
+                        state.scroll_accumulator -= clicks
             else:
                 # Normal scroll mode
                 if state.mouse_held:
@@ -432,20 +444,15 @@ def run_controller() -> None:
                     state.mouse_held = False
                 active_gesture = "SCROLL_MODE"
 
-                if state.scroll_ref_y is None:
-                    state.scroll_ref_y = my      # anchor on entry
-                else:
-                    delta_y = state.scroll_ref_y - my   # up → positive
-                    state.scroll_accumulator += delta_y
-
-                    if abs(state.scroll_accumulator) > Thresholds.SCROLL_DEADZONE:
-                        clicks = int(state.scroll_accumulator * \
-                                     Thresholds.SCROLL_SENSITIVITY)
-                        if clicks != 0:
-                            pyautogui.scroll(clicks)
-                            # Subtract only the consumed portion
-                            state.scroll_accumulator -= clicks / \
-                                                        Thresholds.SCROLL_SENSITIVITY
+                offset_y = state.scroll_ref_y - my  # up = positive
+                if abs(offset_y) > Thresholds.SCROLL_DEADZONE:
+                    state.scroll_accumulator += (
+                        offset_y * Thresholds.SCROLL_SENSITIVITY * dt
+                    )
+                    clicks = int(state.scroll_accumulator)
+                    if clicks != 0:
+                        pyautogui.scroll(clicks)
+                        state.scroll_accumulator -= clicks
                     state.scroll_ref_y = my
 
         else:
@@ -477,12 +484,21 @@ def run_controller() -> None:
 
             # ── 5. GO BACK (thumb 4 + index MCP 5) ───────
             elif state.check_pinch("GO_BACK", lms,
-                                    LM["THUMB_TIP"], LM["IDX_MCP"]):
+                                    LM["THUMB_TIP"], LM["PINKY_MCP"]):
                 if state.can_fire("GO_BACK"):
                     GESTURES["GO_BACK"].execute()
                     state.mark_fired("GO_BACK")
                     active_gesture = "GO_BACK"
                     print("  ◀️  Go Back")
+
+            # ── 6. GO FORWARD (thumb 4 + ring PIP 14) ────
+            elif state.check_pinch("GO_FORWARD", lms,
+                                    LM["THUMB_TIP"], LM["RNG_PIP"]):
+                if state.can_fire("GO_FORWARD"):
+                    GESTURES["GO_FORWARD"].execute()
+                    state.mark_fired("GO_FORWARD")
+                    active_gesture = "GO_FORWARD"
+                    print("  ▶️  Go Forward")
 
             else:
                 active_gesture = "IDLE"

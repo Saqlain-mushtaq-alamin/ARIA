@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 import pyautogui
-import subprocess
 import platform
 
 # ═══════════════════════════════════════════════════════════
@@ -50,6 +49,7 @@ class Thresholds:
     LEFT_CLICK_COOLDOWN  = 0.38
     RIGHT_CLICK_COOLDOWN = 0.45
     GO_BACK_COOLDOWN     = 0.90
+    GO_FORWARD_COOLDOWN  = 0.90
 
 
 # ═══════════════════════════════════════════════════════════
@@ -174,12 +174,23 @@ GESTURES: dict[str, Gesture] = {
     # ── 6. GO BACK ────────────────────────────────────────
     "GO_BACK": Gesture(
         name        = "Go Back",
-        description = "Thumb tip (4) touches Index MCP (5). Browser/app back.",
+        description = "Thumb tip (4) touches Pinky MCP (17). Browser/app back.",
         emoji       = "◀️",
-        landmarks   = (4, 5),
+        landmarks   = (4, 17),
         action_type = "navigate",
         cooldown    = Thresholds.GO_BACK_COOLDOWN,
         _executor   = lambda: _go_back(),
+    ),
+
+    # ── 6b. GO FORWARD ───────────────────────────────────
+    "GO_FORWARD": Gesture(
+        name        = "Go Forward",
+        description = "Thumb tip (4) touches Ring PIP (14). Browser/app forward.",
+        emoji       = "▶️",
+        landmarks   = (4, 14),
+        action_type = "navigate",
+        cooldown    = Thresholds.GO_FORWARD_COOLDOWN,
+        _executor   = lambda: _go_forward(),
     ),
 
     # ── 7. SWIPE LEFT (go back / prev) ────────────────────
