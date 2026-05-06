@@ -166,6 +166,8 @@ class GestureState:
         # Scroll tracking
         self.scroll_ref_y: Optional[float] = None  # y-pos when scroll mode entered
         self.scroll_accumulator: float     = 0.0
+        self.scroll_mode_engaged: bool     = False  # with hysteresis
+        self.scroll_vel: float             = 0.0    # clicks/sec (signed)
 
         # Swipe tracking (deque of recent palm x-positions)
         self.palm_x_history: deque[float] = deque(maxlen=15)
@@ -281,7 +283,7 @@ def draw_hud(frame: np.ndarray, active_gesture: str,
         ("8→cursor", (200, 200, 200)),
         ("4+12=LClick", GESTURE_COLORS["LEFT_CLICK"]),
         ("4+16=RClick", GESTURE_COLORS["RIGHT_CLICK"]),
-        ("8+12+swipe=Scroll", GESTURE_COLORS["SCROLL_MODE"]),
+        ("8+12=AutoScroll", GESTURE_COLORS["SCROLL_MODE"]),
         ("4+17=Back", GESTURE_COLORS["GO_BACK"]),
         ("4+14=Fwd", GESTURE_COLORS["GO_FORWARD"]),
         ("Palm swipe=Nav", GESTURE_COLORS["SWIPE_LEFT"]),
@@ -408,52 +410,56 @@ def run_controller() -> None:
 
         # ── 2. SCROLL MODE (landmark 8 + 12 pinched) ─────
         scroll_d = norm_dist(lms, LM["IDX_TIP"], LM["MID_TIP"])
-        scroll_active = scroll_d < Thresholds.SCROLL_PINCH_THRESH
+        if not state.scroll_mode_engaged and scroll_d < Thresholds.SCROLL_PINCH_ENGAGE:
+            state.scroll_mode_engaged = True
+            state.scroll_ref_y = None
+            state.scroll_accumulator = 0.0
+            state.scroll_vel = 0.0
+        elif state.scroll_mode_engaged and scroll_d > Thresholds.SCROLL_PINCH_RELEASE:
+            state.scroll_mode_engaged = False
+            state.scroll_ref_y = None
+            state.scroll_accumulator = 0.0
+            state.scroll_vel = 0.0
+
+        scroll_active = state.scroll_mode_engaged
 
         if scroll_active:
             # Midpoint y of index+middle tip pair
             my = (lms[LM["IDX_TIP"]].y + lms[LM["MID_TIP"]].y) / 2
 
             # Anchor on entry. While held, scroll speed depends on how far the
-            # hand is from the anchor (like holding mouse-wheel and moving).
+            # hand is from the anchor (like “holding scroll” and moving).
             if state.scroll_ref_y is None:
                 state.scroll_ref_y = my
                 state.scroll_accumulator = 0.0
+                state.scroll_vel = 0.0
 
-            # ── Click-drag scroll (left-click HELD + scroll) ──
-            if state.is_pinch_held("LEFT_CLICK"):
-                # Rare multi-select mode: hold mouse button while scrolling
-                if not state.mouse_held:
-                    pyautogui.mouseDown()
-                    state.mouse_held = True
-                active_gesture = "CLICK_DRAG"
-                offset_y = state.scroll_ref_y - my  # up = positive
-                if abs(offset_y) > Thresholds.SCROLL_DEADZONE * 3:
-                    # Scroll rate is continuous while held; scale by dt.
-                    state.scroll_accumulator += (
-                        offset_y * Thresholds.SCROLL_SENSITIVITY * dt * 3
-                    )
-                    clicks = int(state.scroll_accumulator)
-                    if clicks != 0:
-                        pyautogui.scroll(clicks)
-                        state.scroll_accumulator -= clicks
+            active_gesture = "SCROLL_MODE"
+
+            # Convert offset to a scroll velocity (clicks/sec).
+            offset_y = state.scroll_ref_y - my  # up = positive
+            if abs(offset_y) <= Thresholds.SCROLL_DEADZONE:
+                target_vel = 0.0
             else:
-                # Normal scroll mode
-                if state.mouse_held:
-                    pyautogui.mouseUp()
-                    state.mouse_held = False
-                active_gesture = "SCROLL_MODE"
+                target_vel = offset_y * Thresholds.SCROLL_CLICKS_PER_SEC
 
-                offset_y = state.scroll_ref_y - my  # up = positive
-                if abs(offset_y) > Thresholds.SCROLL_DEADZONE:
-                    state.scroll_accumulator += (
-                        offset_y * Thresholds.SCROLL_SENSITIVITY * dt
-                    )
-                    clicks = int(state.scroll_accumulator)
-                    if clicks != 0:
-                        pyautogui.scroll(clicks)
-                        state.scroll_accumulator -= clicks
-                    state.scroll_ref_y = my
+            # Clamp velocity.
+            max_v = float(Thresholds.SCROLL_MAX_CLICKS_SEC)
+            if target_vel > max_v:
+                target_vel = max_v
+            elif target_vel < -max_v:
+                target_vel = -max_v
+
+            # Smooth velocity to reduce jitter.
+            a = float(Thresholds.SCROLL_VEL_EMA)
+            state.scroll_vel = a * target_vel + (1.0 - a) * state.scroll_vel
+
+            # Emit wheel scroll events continuously while in scroll mode.
+            state.scroll_accumulator += state.scroll_vel * dt
+            clicks = int(state.scroll_accumulator)
+            if clicks != 0:
+                pyautogui.scroll(clicks)
+                state.scroll_accumulator -= clicks
 
         else:
             # Reset scroll state when not in scroll mode
@@ -520,7 +526,8 @@ def run_controller() -> None:
             LM["THUMB_TIP"]:((255, 80, 80),  8),
             LM["MID_TIP"]:  ((255, 200, 0),  8),
             LM["RNG_TIP"]:  ((80, 80, 255),  8),
-            LM["IDX_MCP"]:  ((200, 0, 255),  7),
+            LM["RNG_PIP"]:  ((0, 180, 255),  7),
+            LM["PINKY_MCP"]:((180, 0, 255),  7),
         }.items():
             lm = lms[idx]
             cx, cy = int(lm.x * fw), int(lm.y * fh)

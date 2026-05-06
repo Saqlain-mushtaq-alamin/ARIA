@@ -31,9 +31,15 @@ class Thresholds:
     PINCH_RELEASE = 0.12    # hysteresis: gesture releases only above this
 
     # ── Scroll mode (index 8 + middle 12 pinched together) ──
-    SCROLL_PINCH_THRESH = 0.07    # how close 8 & 12 must be
-    SCROLL_SENSITIVITY  = 600     # lower = faster scroll
-    SCROLL_DEADZONE     = 0.008   # ignore tiny jitter
+    # Scroll mode is held by pinching Index tip (8) + Middle tip (12).
+    # We emit real scroll-wheel events (not middle-click autoscroll) so it
+    # works on links/icons (e.g., YouTube) without opening new tabs.
+    SCROLL_PINCH_ENGAGE   = 0.07   # engage when 8 & 12 are closer than this
+    SCROLL_PINCH_RELEASE  = 0.09   # release only when they separate beyond this
+    SCROLL_DEADZONE       = 0.008  # ignore tiny jitter around the anchor
+    SCROLL_CLICKS_PER_SEC = 2400   # speed scalar (tune for comfort)
+    SCROLL_MAX_CLICKS_SEC = 3200   # clamp to avoid runaway scrolling
+    SCROLL_VEL_EMA        = 0.35   # smoothing for scroll velocity (0..1)
 
     # ── Swipe (whole-hand lateral velocity) ──────────────
     SWIPE_VEL_THRESHOLD = 0.40    # normalised units/frame  (tune per user)
