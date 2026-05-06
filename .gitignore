@@ -32,3 +32,6 @@ data/playwright_profile/
 memory/
 *.db-wal
 *.db-shm
+
+vision/models
+*.task
