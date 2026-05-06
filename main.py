@@ -110,8 +110,30 @@ def _start_emotion_detector() -> None:
             camera_index=int(os.getenv("EMOTION_CAMERA_INDEX", "0")),
             interval_seconds=float(os.getenv("EMOTION_INTERVAL_SECONDS", "60")),
             window_minutes=int(os.getenv("EMOTION_WINDOW_MINUTES", "60")),
+            log_samples=os.getenv("EMOTION_LOG_SAMPLES", "1").strip().lower() in {"1", "true", "yes", "on"},
+            save_last_frame=os.getenv("EMOTION_SAVE_LAST_FRAME", "0").strip().lower() in {"1", "true", "yes", "on"},
         )
-        _EMOTION_DETECTOR = start_emotion_detector_thread(config=cfg)
+
+        def _on_vibe_update(_sample, state_payload):
+            try:
+                from scheduler.tracker import apply_tired_postpone_rule
+            except Exception:
+                return
+
+            try:
+                msg = apply_tired_postpone_rule(state_payload)
+            except Exception:
+                msg = None
+
+            if msg:
+                print(f"[VibeRule] {msg}")
+                if os.getenv("EMOTION_RULE_SPEAK", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                    try:
+                        speak(msg)
+                    except Exception:
+                        pass
+
+        _EMOTION_DETECTOR = start_emotion_detector_thread(config=cfg, on_update=_on_vibe_update)
         print("Emotion detector started (vibe sampling enabled).")
     except Exception as exc:
         print(f"Emotion detector failed to start: {exc}")

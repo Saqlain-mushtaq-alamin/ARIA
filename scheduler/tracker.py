@@ -692,3 +692,176 @@ def day_stats(day: str | None = None, *, path: str = DEFAULT_TRACKER_PATH) -> Da
     planned = len(day_tasks)
     completed = sum(1 for t in day_tasks.values() if bool(t.get("completed")))
     return DayStats(planned=planned, completed=completed)
+
+
+def apply_tired_postpone_rule(
+    emotion_state: dict[str, Any],
+    *,
+    path: str = DEFAULT_TRACKER_PATH,
+    after_hour_local: int = 23,
+    tasks_to_move: int = 2,
+) -> str | None:
+    """If it's late and the user looks tired, postpone last tasks to tomorrow.
+
+    Rule:
+    - If local time hour >= after_hour_local
+    - AND emotion_state window_dominant_state or last_state == 'tired'
+    - Move up to `tasks_to_move` last incomplete tasks from today's plan to tomorrow
+
+    Returns a short message when a change was applied, else None.
+    """
+
+    try:
+        hour = datetime.now().hour
+    except Exception:
+        return None
+
+    if hour < int(after_hour_local):
+        return None
+
+    vibe = (emotion_state or {})
+    vibe_state = str(vibe.get("window_dominant_state") or vibe.get("last_state") or "").strip().lower()
+    if vibe_state != "tired":
+        return None
+
+    today_key = _today_iso()
+    tomorrow_key = (date.today() + timedelta(days=1)).isoformat()
+
+    state = load_state(path)
+    plans: dict[str, Any] = state.setdefault("plans", {})
+    plan_today = plans.get(today_key)
+    if not isinstance(plan_today, dict):
+        return None
+
+    blocks_today = [b for b in (plan_today.get("blocks") or []) if isinstance(b, dict)]
+    if not blocks_today:
+        return None
+
+    tasks_by_day: dict[str, Any] = state.setdefault("tasks", {})
+    day_tasks: dict[str, Any] = tasks_by_day.setdefault(today_key, {})
+
+    # Collect last incomplete tasks by walking blocks backwards.
+    to_move_keys: list[str] = []
+    seen: set[str] = set()
+    for b in reversed(blocks_today):
+        task_name = str(b.get("task") or "").strip()
+        if not task_name:
+            continue
+        key = _normalize_key(task_name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+
+        completed = False
+        if key in day_tasks:
+            completed = bool(day_tasks[key].get("completed"))
+
+        if not completed:
+            to_move_keys.append(key)
+            if len(to_move_keys) >= int(tasks_to_move):
+                break
+
+    if not to_move_keys:
+        return None
+
+    # Remove from today's plan blocks and day tasks.
+    def keep_block(b: dict[str, Any]) -> bool:
+        name = str(b.get("task") or "").strip()
+        if not name:
+            return True
+        return _normalize_key(name) not in set(to_move_keys)
+
+    new_blocks_today = [b for b in blocks_today if keep_block(b)]
+    plan_today["blocks"] = new_blocks_today
+
+    # Also remove from today's task definitions list (plan source-of-truth).
+    today_task_defs = [t for t in (plan_today.get("tasks") or []) if isinstance(t, dict)]
+    plan_today["tasks"] = [
+        t for t in today_task_defs if _normalize_key(str(t.get("task") or "")) not in set(to_move_keys)
+    ]
+
+    # Remove the tasks from today's tracked tasks (lower remaining count).
+    for k in to_move_keys:
+        try:
+            day_tasks.pop(k, None)
+        except Exception:
+            pass
+
+    # Add to tomorrow plan as flexible tasks and re-optimize tomorrow.
+    plan_tomorrow = plans.get(tomorrow_key)
+    if not isinstance(plan_tomorrow, dict):
+        plan_tomorrow = {"input": "", "tasks": [], "blocks": [], "updated_at": datetime.utcnow().isoformat() + "Z"}
+        plans[tomorrow_key] = plan_tomorrow
+
+    tomorrow_tasks = [t for t in (plan_tomorrow.get("tasks") or []) if isinstance(t, dict)]
+    existing_keys = {_normalize_key(str(t.get("task") or "")) for t in tomorrow_tasks}
+
+    # Pull the original task definitions from the pre-filtered snapshot when available.
+    today_tasks_def = [t for t in today_task_defs if isinstance(t, dict)]
+    by_key: dict[str, dict[str, Any]] = {}
+    for t in today_tasks_def:
+        k = _normalize_key(str(t.get("task") or ""))
+        if k:
+            by_key[k] = dict(t)
+
+    moved = 0
+    for k in to_move_keys:
+        if k in existing_keys:
+            continue
+        tdef = dict(by_key.get(k) or {})
+        task_name = str(tdef.get("task") or "").strip()
+        if not task_name:
+            # fallback to key as readable task
+            task_name = k
+        # Make it flexible so optimizer places it in morning work windows.
+        tdef["task"] = task_name
+        tdef["type"] = "flexible"
+        tdef.pop("time", None)
+        tdef.pop("start", None)
+        tdef.pop("end", None)
+        # If deadline was today, bump to tomorrow.
+        if str(tdef.get("deadline") or "").strip().lower() == "today":
+            tdef["deadline"] = "tomorrow"
+        tomorrow_tasks.append(tdef)
+        existing_keys.add(k)
+        moved += 1
+
+    existing_blocks_tomorrow = [b for b in (plan_tomorrow.get("blocks") or []) if isinstance(b, dict)]
+    if moved <= 0 and existing_blocks_tomorrow:
+        # Nothing new to add; keep existing schedule for tomorrow.
+        new_blocks_tomorrow = existing_blocks_tomorrow
+    else:
+        new_blocks_tomorrow = optimize_day(tomorrow_tasks)
+        plan_tomorrow["tasks"] = tomorrow_tasks
+        plan_tomorrow["blocks"] = new_blocks_tomorrow
+        plan_tomorrow["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+    # Update tomorrow's day task tracker entries in the SAME state object.
+    tomorrow_day_tasks: dict[str, Any] = tasks_by_day.setdefault(tomorrow_key, {})
+    for b in new_blocks_tomorrow:
+        task = str(b.get("task") or "").strip()
+        if not task:
+            continue
+        task_key = _normalize_key(task)
+        if not task_key:
+            continue
+        tomorrow_day_tasks.setdefault(
+            task_key,
+            {
+                "task": task,
+                "type": b.get("type"),
+                "start": b.get("start"),
+                "end": b.get("end"),
+                "completed": False,
+                "completed_at": None,
+            },
+        )
+
+        habit = _infer_habit(task)
+        if habit:
+            state.setdefault("habits", {}).setdefault(_normalize_key(habit), {"name": habit, "dates": []})
+
+    save_state(state, path)
+    if moved > 0:
+        return f"You look tired. Moved {moved} task(s) to tomorrow morning." 
+    return None

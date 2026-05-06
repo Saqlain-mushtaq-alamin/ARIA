@@ -42,6 +42,11 @@ class EmotionDetectorConfig:
     detector_backend: str = "opencv"  # fastest lightweight option
     enforce_detection: bool = False
 
+    # Observability
+    log_samples: bool = True
+    save_last_frame: bool = False
+    last_frame_path: str = os.path.join("memory", "emotion_last_frame.jpg")
+
     # Output/state paths
     emotion_state_path: str = os.path.join("memory", "emotion_state.json")
 
@@ -107,6 +112,19 @@ def _capture_frame(camera_index: int) -> Optional["Any"]:
             pass
 
 
+def _maybe_save_frame(frame_bgr: "Any", path: str) -> None:
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return
+
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        cv2.imwrite(path, frame_bgr)
+    except Exception:
+        return
+
+
 def _deepface_analyze_emotion(
     frame_bgr: "Any",
     detector_backend: str,
@@ -119,7 +137,7 @@ def _deepface_analyze_emotion(
         return None
 
     try:
-        result = DeepFace.analyze(
+        result_any: Any = DeepFace.analyze(
             img_path=frame_bgr,
             actions=["emotion"],
             enforce_detection=enforce_detection,
@@ -129,12 +147,18 @@ def _deepface_analyze_emotion(
         return None
 
     # DeepFace may return a list when multiple faces are detected.
-    if isinstance(result, list):
-        if not result:
+    payload: Any
+    if isinstance(result_any, list):
+        if not result_any:
             return None
-        result = result[0]
+        payload = result_any[0]
+    else:
+        payload = result_any
 
-    emotion = (result or {}).get("emotion")
+    if not isinstance(payload, dict):
+        return None
+
+    emotion = payload.get("emotion")
     if not isinstance(emotion, dict):
         return None
 
@@ -270,6 +294,9 @@ class EmotionDetector:
         if frame is None:
             return None, None
 
+        if self.config.save_last_frame:
+            _maybe_save_frame(frame, self.config.last_frame_path)
+
         base = _deepface_analyze_emotion(
             frame,
             detector_backend=self.config.detector_backend,
@@ -289,6 +316,11 @@ class EmotionDetector:
 
         self._samples.append(sample)
         state_payload = self._write_state_file()
+
+        if self.config.log_samples:
+            print(
+                f"[EmotionDetector] {sample.timestamp_utc} dominant={sample.dominant_state} scores={sample.scores}"
+            )
 
         if self.config.store_snapshots_to_vector_memory:
             _publish_vector_memory(
