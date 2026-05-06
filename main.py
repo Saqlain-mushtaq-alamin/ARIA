@@ -2,14 +2,62 @@
 
 import os
 import sys
+import subprocess
 import threading
 import time
+from pathlib import Path
+from typing import Optional
 
 from core.agent import process_text
 from memory.conversation_log import log_interaction
 from voice.stt import listen_and_transcribe
 from voice.tts import speak
 from voice.wake_word import start_wake_word_listener
+
+
+_GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
+
+
+def _try_activate_kinetic_mode(text: str) -> Optional[str]:
+    """Start gesture controller when the user asks for kinetic mode."""
+    global _GESTURE_CONTROLLER_PROC
+
+    if not text:
+        return None
+
+    lower = text.lower()
+    wants_kinetic = (
+        ("kinetic" in lower or "kinitic" in lower)
+        and ("mode" in lower or "control" in lower)
+        and any(k in lower for k in ("activate", "activite", "enable", "start", "on"))
+    )
+    if not wants_kinetic:
+        return None
+
+    # Clean up stale process handle.
+    if _GESTURE_CONTROLLER_PROC is not None and _GESTURE_CONTROLLER_PROC.poll() is not None:
+        _GESTURE_CONTROLLER_PROC = None
+
+    if _GESTURE_CONTROLLER_PROC is not None:
+        return "Kinetic mode is already running. Focus the webcam window; press Q to quit."
+
+    repo_root = Path(__file__).resolve().parent
+    script_path = repo_root / "vision" / "gesture_contoll" / "gesture_controller.py"
+    if not script_path.exists():
+        return "Gesture controller not found at vision/gesture_contoll/gesture_controller.py."
+
+    try:
+        _GESTURE_CONTROLLER_PROC = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(repo_root),
+        )
+    except Exception as exc:
+        return f"Failed to start kinetic mode: {exc}"
+
+    return (
+        "Kinetic mode activated. A webcam window should open now. "
+        "Press Q in that window to stop gesture control."
+    )
 
 
 def _ensure_cache_dirs() -> None:
@@ -45,7 +93,7 @@ def _handle_wake_word(device_index: int) -> None:
             return
         if os.getenv("VOICE_DEBUG") == "1":
             print(f"Heard: {text}")
-        response = process_text(text)
+        response = _try_activate_kinetic_mode(text) or process_text(text)
         print(response)
         try:
             log_interaction(text, response, metadata={"source": "voice"})
@@ -75,7 +123,7 @@ def _handle_wake_word(device_index: int) -> None:
         if os.getenv("VOICE_DEBUG") == "1":
             print(f"Heard: {text}")
 
-        response = process_text(text)
+        response = _try_activate_kinetic_mode(text) or process_text(text)
         print(response)
         try:
             log_interaction(text, response, metadata={"source": "voice"})
@@ -100,7 +148,7 @@ def _text_input_loop() -> None:
         text = line.strip()
         if not text:
             continue
-        response = process_text(text)
+        response = _try_activate_kinetic_mode(text) or process_text(text)
         print(response)
         try:
             log_interaction(text, response, metadata={"source": "text"})
