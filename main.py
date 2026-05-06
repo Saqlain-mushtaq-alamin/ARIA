@@ -121,7 +121,20 @@ def _start_emotion_detector() -> None:
                 return
 
             try:
-                msg = apply_tired_postpone_rule(state_payload)
+                trigger_states = tuple(
+                    s.strip().lower()
+                    for s in os.getenv("EMOTION_RULE_STATES", "tired,stressed,frustrated").split(",")
+                    if s.strip()
+                )
+                msg = apply_tired_postpone_rule(
+                    state_payload,
+                    night_start_hour_local=int(os.getenv("EMOTION_RULE_NIGHT_START", "21")),
+                    night_end_hour_local=int(os.getenv("EMOTION_RULE_NIGHT_END", "6")),
+                    tasks_to_move=int(os.getenv("EMOTION_RULE_TASKS_TO_MOVE", "2")),
+                    trigger_states=trigger_states,
+                    min_trigger_score=float(os.getenv("EMOTION_RULE_MIN_SCORE", "35")),
+                    cooldown_minutes=int(os.getenv("EMOTION_RULE_COOLDOWN_MIN", "45")),
+                )
             except Exception:
                 msg = None
 

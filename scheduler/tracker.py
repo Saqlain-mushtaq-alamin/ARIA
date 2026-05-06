@@ -698,15 +698,24 @@ def apply_tired_postpone_rule(
     emotion_state: dict[str, Any],
     *,
     path: str = DEFAULT_TRACKER_PATH,
-    after_hour_local: int = 23,
+    night_start_hour_local: int = 21,
+    night_end_hour_local: int = 6,
     tasks_to_move: int = 2,
+    trigger_states: tuple[str, ...] = ("tired", "stressed", "frustrated"),
+    min_trigger_score: float = 35.0,
+    cooldown_minutes: int = 45,
 ) -> str | None:
-    """If it's late and the user looks tired, postpone last tasks to tomorrow.
+    """Night-time rest automation based on webcam vibe.
 
-    Rule:
-    - If local time hour >= after_hour_local
-    - AND emotion_state window_dominant_state or last_state == 'tired'
-    - Move up to `tasks_to_move` last incomplete tasks from today's plan to tomorrow
+    Rule (minimal + deterministic):
+    - If local time is within the night window (default 21:00–06:00)
+    - AND vibe indicates one of trigger_states (tired/stressed/frustrated)
+      via dominant/last state OR a score >= min_trigger_score
+    - Then move up to `tasks_to_move` last incomplete tasks from today's plan
+      to tomorrow and return a gentle message.
+
+    Cooldown:
+    - Uses `state['meta']['rest_rule_last_trigger_utc']` to avoid repeating.
 
     Returns a short message when a change was applied, else None.
     """
@@ -716,26 +725,68 @@ def apply_tired_postpone_rule(
     except Exception:
         return None
 
-    if hour < int(after_hour_local):
+    start_h = int(night_start_hour_local)
+    end_h = int(night_end_hour_local)
+    if start_h == end_h:
+        # Degenerate window: treat as disabled.
+        return None
+
+    # Night window can span midnight.
+    in_night = hour >= start_h or hour < end_h if start_h > end_h else start_h <= hour < end_h
+    if not in_night:
         return None
 
     vibe = (emotion_state or {})
     vibe_state = str(vibe.get("window_dominant_state") or vibe.get("last_state") or "").strip().lower()
-    if vibe_state != "tired":
+
+    last_scores = vibe.get("last_scores")
+    scores: dict[str, float] = {}
+    if isinstance(last_scores, dict):
+        for k, v in last_scores.items():
+            try:
+                scores[str(k).strip().lower()] = float(v)
+            except Exception:
+                continue
+
+    triggers = tuple(s.strip().lower() for s in (trigger_states or ()))
+    if not triggers:
         return None
+
+    score_hit = any(scores.get(s, 0.0) >= float(min_trigger_score) for s in triggers)
+    state_hit = vibe_state in triggers
+    if not (state_hit or score_hit):
+        return None
+
+    state = load_state(path)
+
+    # Cooldown to avoid spam.
+    meta: dict[str, Any] = state.setdefault("meta", {})
+    last_trigger = meta.get("rest_rule_last_trigger_utc")
+    if isinstance(last_trigger, str) and last_trigger:
+        try:
+            last_dt = datetime.fromisoformat(last_trigger.replace("Z", "+00:00"))
+            now_dt = datetime.utcnow().replace(tzinfo=last_dt.tzinfo)
+            if now_dt - last_dt < timedelta(minutes=int(cooldown_minutes)):
+                return None
+        except Exception:
+            pass
 
     today_key = _today_iso()
     tomorrow_key = (date.today() + timedelta(days=1)).isoformat()
 
-    state = load_state(path)
     plans: dict[str, Any] = state.setdefault("plans", {})
     plan_today = plans.get(today_key)
     if not isinstance(plan_today, dict):
-        return None
+        # No schedule yet, but still encourage rest.
+        meta["rest_rule_last_trigger_utc"] = datetime.utcnow().isoformat() + "Z"
+        save_state(state, path)
+        return "You look like you need a break. Want to pause for a few minutes and breathe?"
 
     blocks_today = [b for b in (plan_today.get("blocks") or []) if isinstance(b, dict)]
     if not blocks_today:
-        return None
+        meta["rest_rule_last_trigger_utc"] = datetime.utcnow().isoformat() + "Z"
+        save_state(state, path)
+        return "You look like you need a break. Want to pause for a few minutes and breathe?"
 
     tasks_by_day: dict[str, Any] = state.setdefault("tasks", {})
     day_tasks: dict[str, Any] = tasks_by_day.setdefault(today_key, {})
@@ -762,7 +813,9 @@ def apply_tired_postpone_rule(
                 break
 
     if not to_move_keys:
-        return None
+        meta["rest_rule_last_trigger_utc"] = datetime.utcnow().isoformat() + "Z"
+        save_state(state, path)
+        return "You look like you need a break. Want to pause for a few minutes and breathe?"
 
     # Remove from today's plan blocks and day tasks.
     def keep_block(b: dict[str, Any]) -> bool:
@@ -861,7 +914,12 @@ def apply_tired_postpone_rule(
         if habit:
             state.setdefault("habits", {}).setdefault(_normalize_key(habit), {"name": habit, "dates": []})
 
+    meta["rest_rule_last_trigger_utc"] = datetime.utcnow().isoformat() + "Z"
     save_state(state, path)
     if moved > 0:
-        return f"You look tired. Moved {moved} task(s) to tomorrow morning." 
+        # Gentle, requested phrasing.
+        return (
+            f"You look {vibe_state or 'a bit overwhelmed'}. "
+            f"Let’s take a short rest — I moved the last {moved} task(s) to tomorrow morning."
+        )
     return None
