@@ -16,6 +16,7 @@ from voice.wake_word import start_wake_word_listener
 
 
 _GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
+_EMOTION_DETECTOR = None
 
 
 def _try_activate_kinetic_mode(text: str) -> Optional[str]:
@@ -79,6 +80,41 @@ def _load_env() -> None:
 
     load_dotenv()
     load_dotenv(os.path.join("config", ".env"))
+
+
+def _start_emotion_detector() -> None:
+    """Start webcam-based emotion sampling in a background thread.
+
+    Controlled via env vars:
+    - EMOTION_DETECTOR: '1' to enable (default), '0' to disable
+    - EMOTION_INTERVAL_SECONDS: sampling interval (default 60)
+    - EMOTION_WINDOW_MINUTES: rolling summary window (default 60)
+    - EMOTION_CAMERA_INDEX: webcam index (default 0)
+    """
+    global _EMOTION_DETECTOR
+
+    if os.getenv("EMOTION_DETECTOR", "1").strip() not in {"1", "true", "yes", "on"}:
+        return
+
+    if _EMOTION_DETECTOR is not None:
+        return
+
+    try:
+        from vision.emotion_detector import EmotionDetectorConfig, start_emotion_detector_thread
+    except Exception as exc:
+        print(f"Emotion detector import failed: {exc}")
+        return
+
+    try:
+        cfg = EmotionDetectorConfig(
+            camera_index=int(os.getenv("EMOTION_CAMERA_INDEX", "0")),
+            interval_seconds=float(os.getenv("EMOTION_INTERVAL_SECONDS", "60")),
+            window_minutes=int(os.getenv("EMOTION_WINDOW_MINUTES", "60")),
+        )
+        _EMOTION_DETECTOR = start_emotion_detector_thread(config=cfg)
+        print("Emotion detector started (vibe sampling enabled).")
+    except Exception as exc:
+        print(f"Emotion detector failed to start: {exc}")
 
 
 def _handle_wake_word(device_index: int) -> None:
@@ -163,6 +199,7 @@ def _text_input_loop() -> None:
 def main() -> None:
     _load_env()
     _ensure_cache_dirs()
+    _start_emotion_detector()
     start_wake_word_listener(_handle_wake_word)
     threading.Thread(target=_text_input_loop, daemon=True).start()
     while True:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 import json
+import os
 import re
 from typing import Any
 
@@ -332,43 +334,82 @@ def process_text(user_text: str) -> str:
         )
 
     def build_prompt_with_memory(prompt: str) -> str:
-        if search_memory is None:
-            return prompt
+        vibe_block = ""
         try:
-            matches = search_memory(prompt, top_k=5)
+            vibe_path = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..", "memory", "emotion_state.json")
+            )
+            if os.path.exists(vibe_path):
+                with open(vibe_path, "r", encoding="utf-8") as f:
+                    vibe = json.load(f)
+                last_update = vibe.get("last_update_utc")
+                if isinstance(last_update, str) and last_update:
+                    try:
+                        last_dt = datetime.fromisoformat(last_update)
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        last_dt = None
+                else:
+                    last_dt = None
+
+                # Only include if reasonably fresh.
+                if last_dt is not None and (_utc := datetime.now(timezone.utc)) - last_dt <= timedelta(minutes=90):
+                    dominant = vibe.get("window_dominant_state") or vibe.get("last_state")
+                    dist = vibe.get("window_distribution_percent")
+                    samples = vibe.get("samples")
+                    window_minutes = vibe.get("window_minutes")
+                    vibe_block = (
+                        "Vibe (from webcam):\n"
+                        f"- window={window_minutes}m, samples={samples}, dominant={dominant}\n"
+                        f"- distribution%={dist}\n"
+                        f"- last={vibe.get('last_state')} @ {vibe.get('last_timestamp_utc')}\n"
+                    )
         except Exception:
+            vibe_block = ""
+
+        matches = []
+        if search_memory is not None:
+            try:
+                matches = search_memory(prompt, top_k=5)
+            except Exception:
+                matches = []
+
+        memory_block = ""
+        if matches:
+            memory_lines: list[str] = []
+            for m in matches:
+                text: str | None = getattr(m, "text", None)
+                if text is None and isinstance(m, Mapping):
+                    text = str(m.get("text") or "")
+                if text is None:
+                    text = str(m)
+
+                metadata_obj: Any = getattr(m, "metadata", None)
+                if metadata_obj is None and isinstance(m, Mapping):
+                    metadata_obj = m.get("metadata")
+
+                date: Any = None
+                if isinstance(metadata_obj, Mapping):
+                    date = metadata_obj.get("date") or metadata_obj.get("timestamp")
+
+                if date:
+                    memory_lines.append(f"- {text} ({date})")
+                else:
+                    memory_lines.append(f"- {text}")
+
+            memory_block = "Memory:\n" + "\n".join(memory_lines) + "\n"
+
+        if not vibe_block and not memory_block:
             return prompt
 
-        if not matches:
-            return prompt
+        context_parts = []
+        if vibe_block:
+            context_parts.append(vibe_block.strip())
+        if memory_block:
+            context_parts.append(memory_block.strip())
 
-        memory_lines: list[str] = []
-        for m in matches:
-            text: str | None = getattr(m, "text", None)
-            if text is None and isinstance(m, Mapping):
-                text = str(m.get("text") or "")
-            if text is None:
-                text = str(m)
-
-            metadata_obj: Any = getattr(m, "metadata", None)
-            if metadata_obj is None and isinstance(m, Mapping):
-                metadata_obj = m.get("metadata")
-
-            date: Any = None
-            if isinstance(metadata_obj, Mapping):
-                date = metadata_obj.get("date") or metadata_obj.get("timestamp")
-
-            if date:
-                memory_lines.append(f"- {text} ({date})")
-            else:
-                memory_lines.append(f"- {text}")
-
-        memory_block = "\n".join(memory_lines)
-        return (
-            "Use the following memory as context if relevant.\n\n"
-            f"Memory:\n{memory_block}\n\n"
-            f"User: {prompt}"
-        )
+        return "Use the following context if relevant.\n\n" + "\n\n".join(context_parts) + f"\n\nUser: {prompt}"
 
     if intent in {"answer_question", "type_generated_text"}:
         prompt = parameters.get("prompt") or user_text
