@@ -191,8 +191,10 @@ def get_schedule_blocks(day: str | None = None, *, path: str = DEFAULT_TRACKER_P
     """Return the stored optimized blocks for the day, if available."""
 
     plan = load_plan(day, path=path)
-    if plan and isinstance(plan.get("blocks"), list):
-        return [b for b in plan.get("blocks") if isinstance(b, dict)]
+    if plan:
+        blocks_obj = plan.get("blocks")
+        if isinstance(blocks_obj, list):
+            return [b for b in blocks_obj if isinstance(b, dict)]
 
     # Fallback: reconstruct from stored day tasks.
     day_key = day or _today_iso()
@@ -233,9 +235,14 @@ def whats_next(
     now = datetime.now()
     now_m = now.hour * 60 + now.minute
 
-    def to_mins(hhmm: str) -> int:
+    def to_mins(hhmm: Any) -> int:
         try:
-            h, m = str(hhmm).split(":")
+            if hhmm is None:
+                return 0
+            s = str(hhmm)
+            if ":" not in s:
+                return 0
+            h, m = s.split(":", 1)
             return int(h) * 60 + int(m)
         except Exception:
             return 0
@@ -698,19 +705,26 @@ def apply_tired_postpone_rule(
     emotion_state: dict[str, Any],
     *,
     path: str = DEFAULT_TRACKER_PATH,
+    mode: str = "anytime_sustained",
     night_start_hour_local: int = 21,
     night_end_hour_local: int = 6,
     tasks_to_move: int = 2,
     trigger_states: tuple[str, ...] = ("tired", "stressed", "frustrated"),
     min_trigger_score: float = 35.0,
+    sustained_samples: int = 3,
+    sustained_within_minutes: int = 25,
     cooldown_minutes: int = 45,
 ) -> str | None:
     """Night-time rest automation based on webcam vibe.
 
-    Rule (minimal + deterministic):
-    - If local time is within the night window (default 21:00–06:00)
-    - AND vibe indicates one of trigger_states (tired/stressed/frustrated)
-      via dominant/last state OR a score >= min_trigger_score
+        Rule (minimal + deterministic):
+        - mode='night': trigger only in the night window (default 21:00–06:00)
+        - mode='anytime_sustained': trigger anytime, but only if the signal stays
+            high for N consecutive samples (default 3) within a time window.
+
+        Trigger condition:
+        - vibe indicates one of trigger_states (tired/stressed/frustrated)
+            via dominant/last state OR a score >= min_trigger_score
     - Then move up to `tasks_to_move` last incomplete tasks from today's plan
       to tomorrow and return a gentle message.
 
@@ -720,21 +734,26 @@ def apply_tired_postpone_rule(
     Returns a short message when a change was applied, else None.
     """
 
-    try:
-        hour = datetime.now().hour
-    except Exception:
-        return None
+    mode_norm = str(mode or "").strip().lower()
+    if mode_norm not in {"night", "anytime_sustained"}:
+        mode_norm = "anytime_sustained"
 
-    start_h = int(night_start_hour_local)
-    end_h = int(night_end_hour_local)
-    if start_h == end_h:
-        # Degenerate window: treat as disabled.
-        return None
+    if mode_norm == "night":
+        try:
+            hour = datetime.now().hour
+        except Exception:
+            return None
 
-    # Night window can span midnight.
-    in_night = hour >= start_h or hour < end_h if start_h > end_h else start_h <= hour < end_h
-    if not in_night:
-        return None
+        start_h = int(night_start_hour_local)
+        end_h = int(night_end_hour_local)
+        if start_h == end_h:
+            # Degenerate window: treat as disabled.
+            return None
+
+        # Night window can span midnight.
+        in_night = hour >= start_h or hour < end_h if start_h > end_h else start_h <= hour < end_h
+        if not in_night:
+            return None
 
     vibe = (emotion_state or {})
     vibe_state = str(vibe.get("window_dominant_state") or vibe.get("last_state") or "").strip().lower()
@@ -752,10 +771,60 @@ def apply_tired_postpone_rule(
     if not triggers:
         return None
 
-    score_hit = any(scores.get(s, 0.0) >= float(min_trigger_score) for s in triggers)
-    state_hit = vibe_state in triggers
-    if not (state_hit or score_hit):
-        return None
+    def is_hit(state_name: str, score_map: dict[str, float]) -> bool:
+        sname = str(state_name or "").strip().lower()
+        if sname in triggers:
+            return True
+        return any(score_map.get(s, 0.0) >= float(min_trigger_score) for s in triggers)
+
+    # Option C: require sustained signal over N consecutive recent samples.
+    if mode_norm == "anytime_sustained":
+        recent = vibe.get("recent_samples")
+        if not isinstance(recent, list):
+            return None
+
+        n = max(1, int(sustained_samples))
+        if len(recent) < n:
+            return None
+
+        # Take the last N samples and ensure each is a hit.
+        last_n = recent[-n:]
+
+        # Also ensure they're recent enough (within sustained_within_minutes).
+        try:
+            newest_ts = str(last_n[-1].get("timestamp_utc") or "")
+            newest_dt = datetime.fromisoformat(newest_ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+        for obj in last_n:
+            if not isinstance(obj, dict):
+                return None
+            try:
+                ts = str(obj.get("timestamp_utc") or "")
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+            if newest_dt - dt > timedelta(minutes=int(sustained_within_minutes)):
+                return None
+
+            sname = str(obj.get("dominant_state") or "")
+            smap: dict[str, float] = {}
+            raw_scores = obj.get("scores")
+            if isinstance(raw_scores, dict):
+                for k, v in raw_scores.items():
+                    try:
+                        smap[str(k).strip().lower()] = float(v)
+                    except Exception:
+                        continue
+
+            if not is_hit(sname, smap):
+                return None
+    else:
+        # Night mode: single-sample trigger is OK.
+        if not is_hit(vibe_state, scores):
+            return None
 
     state = load_state(path)
 

@@ -55,6 +55,9 @@ class EmotionDetectorConfig:
     store_window_summaries_to_vector_memory: bool = True
     min_seconds_between_window_summaries: float = 300.0  # 5 minutes
 
+    # State file content
+    recent_samples_to_persist: int = 10
+
 
 @dataclass(frozen=True)
 class EmotionSample:
@@ -280,10 +283,25 @@ class EmotionDetector:
     def _write_state_file(self) -> Dict[str, Any]:
         self._prune()
         summary = _summarize_window(self._samples)
+
+        # Persist a small recent history so downstream rules can detect
+        # sustained states (option C).
+        recent_n = max(1, int(self.config.recent_samples_to_persist))
+        recent = list(self._samples)[-recent_n:]
+        recent_payload = [
+            {
+                "timestamp_utc": s.timestamp_utc,
+                "dominant_state": s.dominant_state,
+                "scores": dict(s.scores),
+            }
+            for s in recent
+        ]
+
         payload: Dict[str, Any] = {
             "last_update_utc": _safe_iso(_utc_now()),
             "interval_seconds": float(self.config.interval_seconds),
             "window_minutes": int(self.config.window_minutes),
+            "recent_samples": recent_payload,
             **summary,
         }
         _atomic_write_json(self.config.emotion_state_path, payload)
