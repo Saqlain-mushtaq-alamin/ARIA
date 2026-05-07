@@ -40,10 +40,17 @@ class EmotionDetectorConfig:
     interval_seconds: float = 60.0
     window_minutes: int = 60
     detector_backend: str = "opencv"  # fastest lightweight option
-    enforce_detection: bool = False
+    # When True, DeepFace must detect a face; otherwise it may return
+    # constant / misleading emotions for blank frames.
+    enforce_detection: bool = True
+
+    # If the camera is present but returns a blank/blocked image, skip inference.
+    # This avoids "detecting" mood when the webcam is off or permissions block it.
+    min_frame_stddev: float = 5.0
 
     # Observability
     log_samples: bool = True
+    log_failures: bool = True
     save_last_frame: bool = False
     last_frame_path: str = os.path.join("memory", "emotion_last_frame.jpg")
 
@@ -120,6 +127,32 @@ def _maybe_save_frame(frame_bgr: "Any", path: str) -> None:
         import cv2  # type: ignore
     except Exception:
         return
+
+
+def _frame_has_signal(frame_bgr: "Any", *, min_stddev: float) -> bool:
+    """Heuristic check to reject blank/blocked frames.
+
+    Many Windows setups will "open" a camera device but return a black frame
+    when permissions are blocked or the device is off. DeepFace can still output
+    an emotion in that case, so we skip inference when the frame lacks signal.
+    """
+
+    if frame_bgr is None:
+        return False
+
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return True  # can't evaluate; don't block
+
+    try:
+        # cv2.meanStdDev expects a valid image array.
+        _mean, std = cv2.meanStdDev(frame_bgr)
+        # std is per-channel; take max to be permissive.
+        std_max = float(std.max()) if hasattr(std, "max") else float(std)
+        return std_max >= float(min_stddev)
+    except Exception:
+        return True
 
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -310,6 +343,13 @@ class EmotionDetector:
     def run_once(self) -> Tuple[Optional[EmotionSample], Optional[Dict[str, Any]]]:
         frame = _capture_frame(self.config.camera_index)
         if frame is None:
+            if self.config.log_failures:
+                print("[EmotionDetector] No webcam frame captured; skipping.")
+            return None, None
+
+        if not _frame_has_signal(frame, min_stddev=float(self.config.min_frame_stddev)):
+            if self.config.log_failures:
+                print("[EmotionDetector] Webcam frame looks blank/blocked; skipping.")
             return None, None
 
         if self.config.save_last_frame:

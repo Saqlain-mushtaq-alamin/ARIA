@@ -90,6 +90,8 @@ def _start_emotion_detector() -> None:
     - EMOTION_INTERVAL_SECONDS: sampling interval (default 60)
     - EMOTION_WINDOW_MINUTES: rolling summary window (default 60)
     - EMOTION_CAMERA_INDEX: webcam index (default 0)
+    - EMOTION_REQUIRE_FACE: '1' to require a detected face (default 1)
+    - EMOTION_MIN_FRAME_STDDEV: reject blank/blocked frames (default 5.0)
     """
     global _EMOTION_DETECTOR
 
@@ -110,6 +112,8 @@ def _start_emotion_detector() -> None:
             camera_index=int(os.getenv("EMOTION_CAMERA_INDEX", "0")),
             interval_seconds=float(os.getenv("EMOTION_INTERVAL_SECONDS", "60")),
             window_minutes=int(os.getenv("EMOTION_WINDOW_MINUTES", "60")),
+            enforce_detection=os.getenv("EMOTION_REQUIRE_FACE", "1").strip().lower() in {"1", "true", "yes", "on"},
+            min_frame_stddev=float(os.getenv("EMOTION_MIN_FRAME_STDDEV", "5.0")),
             log_samples=os.getenv("EMOTION_LOG_SAMPLES", "1").strip().lower() in {"1", "true", "yes", "on"},
             save_last_frame=os.getenv("EMOTION_SAVE_LAST_FRAME", "0").strip().lower() in {"1", "true", "yes", "on"},
         )
@@ -162,7 +166,11 @@ def _handle_wake_word(device_index: int) -> None:
     max_empty = int(os.getenv("VOICE_SESSION_MAX_EMPTY", "2"))
 
     if session_seconds <= 0:
-        text = listen_and_transcribe(input_device_index=device_index)
+        try:
+            text = listen_and_transcribe(input_device_index=device_index)
+        except Exception as exc:
+            print(f"Voice STT failed: {exc}")
+            return
         if not text:
             return
         if os.getenv("VOICE_DEBUG") == "1":
@@ -186,7 +194,11 @@ def _handle_wake_word(device_index: int) -> None:
         if time.time() > session_deadline:
             return
 
-        text = listen_and_transcribe(input_device_index=device_index)
+        try:
+            text = listen_and_transcribe(input_device_index=device_index)
+        except Exception as exc:
+            print(f"Voice STT failed: {exc}")
+            return
         if not text:
             empty_count += 1
             if empty_count >= max_empty:
@@ -238,7 +250,43 @@ def main() -> None:
     _load_env()
     _ensure_cache_dirs()
     _start_emotion_detector()
-    start_wake_word_listener(_handle_wake_word)
+
+    voice_mode = os.getenv("VOICE_MODE", "wakeword").strip().lower()
+    if voice_mode in {"always", "continuous"}:
+        def _always_listen_loop() -> None:
+            print("Voice mode=always (listening for commands; Ctrl+C to stop).")
+            while True:
+                try:
+                    text = listen_and_transcribe(input_device_index=None)
+                except Exception as exc:
+                    print(f"Voice STT failed: {exc}")
+                    time.sleep(1.0)
+                    continue
+
+                if not text:
+                    continue
+
+                if os.getenv("VOICE_DEBUG") == "1":
+                    print(f"Heard: {text}")
+
+                response = _try_activate_kinetic_mode(text) or process_text(text)
+                print(response)
+                try:
+                    log_interaction(text, response, metadata={"source": "voice"})
+                except Exception as exc:
+                    print(f"Log failed: {exc}")
+                try:
+                    speak(response)
+                except Exception as exc:
+                    print(f"TTS failed: {exc}")
+
+        threading.Thread(target=_always_listen_loop, daemon=True).start()
+    else:
+        try:
+            start_wake_word_listener(_handle_wake_word)
+        except Exception as exc:
+            print(f"Wake word listener failed to start: {exc}")
+
     threading.Thread(target=_text_input_loop, daemon=True).start()
     while True:
         time.sleep(0.5)
