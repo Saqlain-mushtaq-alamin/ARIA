@@ -16,6 +16,7 @@ import subprocess
 import ctypes
 import os
 import shutil
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -316,7 +317,7 @@ def _search_papers(query: str, source: str = "arxiv", **_: Any) -> str:
             for i, entry in enumerate(entries, 1):
                 title = (entry.findtext("atom:title", "", ns) or "").replace("\n", " ").strip()
                 link_el = entry.find("atom:id", ns)
-                link = link_el.text.strip() if link_el is not None else ""
+                link = (link_el.text or "").strip() if link_el is not None else ""
                 authors = [a.findtext("atom:name", "", ns) for a in entry.findall("atom:author", ns)]
                 lines.append(f"  {i}. {title}")
                 lines.append(f"     Authors: {', '.join(authors[:3])}")
