@@ -1,166 +1,232 @@
-"""Wake word listener running in a background thread.
+"""
+voice/wake_word.py
+==================
+Wake word listener using openWakeWord.
 
-Notes:
-- Avoid heavy downloads/model init at import time.
-- Never let exceptions in the callback kill the listener loop.
+Core bug fixed
+--------------
+Previously the PyAudio stream was only *stopped* (not closed + terminated)
+before handing control to the STT callback.  Because PyAudio held the device
+open, the STT module's attempt to open the same device silently failed —
+producing the "wake word fires but nothing transcribes" symptom.
+
+Fix: fully close and terminate the PyAudio instance before calling the
+callback, then re-create it from scratch after the callback returns.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Any
+import os
 import threading
 import time
-import os
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pyaudio
 
+from voice.audio_utils import mic_session, _mic_busy, select_microphone, _env_bool, _env_float, _env_int
+
+# ---------------------------------------------------------------------------
+# Model singleton
+# ---------------------------------------------------------------------------
 
 _OWW_MODEL: Any | None = None
+_MODEL_LOCK = threading.Lock()
 
 
 def _get_model() -> Any:
     global _OWW_MODEL
-    if _OWW_MODEL is not None:
+    with _MODEL_LOCK:
+        if _OWW_MODEL is not None:
+            return _OWW_MODEL
+
+        from openwakeword.model import Model          # type: ignore
+        from openwakeword.utils import download_models  # type: ignore
+
+        download_models()
+
+        model_env = os.getenv("WAKEWORD_MODEL", "hey_jarvis")
+        model_names = [m.strip() for m in model_env.split(",") if m.strip()] or ["hey_jarvis"]
+
+        _OWW_MODEL = Model(
+            wakeword_models=model_names,
+            inference_framework=os.getenv("WAKEWORD_FRAMEWORK", "onnx"),
+        )
         return _OWW_MODEL
 
-    from openwakeword.model import Model  # type: ignore
-    from openwakeword.utils import download_models  # type: ignore
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
-    # Download pre-trained models (one-time, no account needed)
-    download_models()
+_CHUNK = 1_280   # frames per read — openWakeWord expects 80 ms @ 16 kHz
+_RATE  = 16_000
 
-    model_name = os.getenv("WAKEWORD_MODEL", "hey_jarvis").strip() or "hey_jarvis"
-    _OWW_MODEL = Model(
-        wakeword_models=[model_name],
-        inference_framework=os.getenv("WAKEWORD_FRAMEWORK", "onnx"),
-    )
-    return _OWW_MODEL
 
+def _open_mic(device_index: int) -> tuple[pyaudio.PyAudio, pyaudio.Stream]:
+    """Open a fresh PyAudio instance + stream.  Raises on failure."""
+    pa = pyaudio.PyAudio()
+    try:
+        stream = pa.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=_RATE,
+            input=True,
+            input_device_index=device_index,
+            frames_per_buffer=_CHUNK,
+        )
+        return pa, stream
+    except Exception:
+        pa.terminate()
+        raise
+
+
+def _close_mic(pa: pyaudio.PyAudio, stream: pyaudio.Stream) -> None:
+    """Cleanly close + terminate — fully releasing the device."""
+    try:
+        stream.stop_stream()
+    except Exception:
+        pass
+    try:
+        stream.close()
+    except Exception:
+        pass
+    try:
+        pa.terminate()
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------------------
+# Listener
+# ---------------------------------------------------------------------------
 
 def listen_for_wake_word(callback: Callable[[int], None]) -> None:
-    """Continuously listen for the wake word and trigger the callback."""
-    if os.getenv("WAKEWORD_DISABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
-        print("Wake word listener disabled (WAKEWORD_DISABLED=1).")
+    """
+    Continuously listen for the configured wake word and invoke *callback*.
+
+    callback receives the device index so the STT layer can open the same mic.
+
+    The mic stream is fully closed before callback() runs, so STT can open
+    the device without conflict.  After callback() returns the stream is
+    re-opened automatically.
+    """
+    if _env_bool("WAKEWORD_DISABLED", False):
+        print("[wakeword] disabled via WAKEWORD_DISABLED env-var.")
         return
 
+    # --- Load model -------------------------------------------------------
     try:
         oww_model = _get_model()
     except Exception as exc:
-        print(f"Wake word model init failed: {exc}")
+        print(f"[wakeword] model init failed: {exc}")
         return
 
-    audio = pyaudio.PyAudio()
-    device_indices: list[int] = []
-    try:
-        default_info = audio.get_default_input_device_info()
-        device_indices.append(int(default_info.get("index", 0)))
-    except OSError:
-        pass
+    # --- Select device ----------------------------------------------------
+    device_index = select_microphone()
 
-    for i in range(audio.get_device_count()):
-        info = audio.get_device_info_by_index(i)
-        if int(info.get("maxInputChannels", 0)) > 0 and i not in device_indices:
-            device_indices.append(i)
+    # --- Thresholds / hysteresis ------------------------------------------
+    trigger_threshold = _env_float("WAKEWORD_TRIGGER_THRESHOLD", 0.25)
+    reset_threshold   = _env_float("WAKEWORD_RESET_THRESHOLD",   0.10)
+    required_hits     = _env_int ("WAKEWORD_REQUIRED_HITS",      2)
+    cooldown_seconds  = _env_float("WAKEWORD_COOLDOWN_SECONDS",  1.5)
+    debug             = _env_bool ("WAKEWORD_DEBUG",             False)
+    debug_every_s     = _env_float("WAKEWORD_DEBUG_EVERY_SECONDS", 2.0)
 
-    if not device_indices:
-        raise RuntimeError("No input audio device found")
-
-    mic_stream = None
-    selected_device_index: int | None = None
-    last_error: Exception | None = None
-    for device_index in device_indices:
-        try:
-            mic_stream = audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=1280,
-            )
-            selected_device_index = int(device_index)
-            break
-        except OSError as exc:
-            last_error = exc
-
-    if mic_stream is None:
-        raise RuntimeError(
-            "Failed to open any input device."
-        ) from last_error
-
-    if selected_device_index is None:
-        raise RuntimeError("Failed to resolve selected input device")
-
-    print(f"Listening for wake word (device={selected_device_index})...")
-
-    # Debounce / hysteresis.
-    # Defaults tuned to be easy to trigger; override via env vars if noisy.
-    trigger_threshold = float(os.getenv("WAKEWORD_TRIGGER_THRESHOLD", "0.35"))
-    reset_threshold = float(os.getenv("WAKEWORD_RESET_THRESHOLD", "0.15"))
-    required_hits = int(os.getenv("WAKEWORD_REQUIRED_HITS", "1"))
-    cooldown_seconds = float(os.getenv("WAKEWORD_COOLDOWN_SECONDS", "1.0"))
-
-    debug = os.getenv("WAKEWORD_DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
-    debug_every_s = float(os.getenv("WAKEWORD_DEBUG_EVERY_SECONDS", "1.0"))
-    last_debug = 0.0
+    print(f"[wakeword] listening on device={device_index}  model={os.getenv('WAKEWORD_MODEL', 'hey_jarvis')}")
+    print("[wakeword] say 'hey jarvis' clearly to activate.")
 
     consecutive_hits = 0
-    armed = True
-    last_trigger_time = 0.0
+    armed            = True
+    last_trigger     = 0.0
+    last_debug       = 0.0
 
     while True:
-        raw = mic_stream.read(1280, exception_on_overflow=False)
-        audio_chunk = np.frombuffer(raw, dtype=np.int16)
-        prediction = oww_model.predict(audio_chunk)
-        scores = prediction[0] if isinstance(prediction, tuple) else prediction
+        # ---- Open mic (or re-open after a session) -----------------------
+        try:
+            pa, stream = _open_mic(device_index)
+        except Exception as exc:
+            print(f"[wakeword] failed to open mic, retrying in 2s: {exc}")
+            time.sleep(2.0)
+            continue
 
-        if debug:
-            now_dbg = time.time()
-            if now_dbg - last_debug >= debug_every_s:
-                last_debug = now_dbg
-                try:
-                    # Print the loudness and top wake score so users can tune thresholds.
-                    rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2))) if audio_chunk.size else 0.0
-                    best_name, best_score = max(scores.items(), key=lambda kv: float(kv[1]))
-                    print(f"[wakeword] rms={rms:.1f} best={best_name}:{float(best_score):.3f}")
-                except Exception:
-                    pass
+        # ---- Listening loop ----------------------------------------------
+        triggered = False
+        try:
+            while True:
+                # Don't fight STT for the device.
+                if _mic_busy.is_set():
+                    time.sleep(0.05)
+                    continue
 
-        for model_name, score in scores.items():
-            now = time.time()
-            if now - last_trigger_time < cooldown_seconds:
-                continue
+                raw = stream.read(_CHUNK, exception_on_overflow=False)
+                audio_chunk = np.frombuffer(raw, dtype=np.int16)
+                prediction  = oww_model.predict(audio_chunk)
+                scores      = prediction if isinstance(prediction, dict) else prediction
 
-            if score >= trigger_threshold and armed:
-                consecutive_hits += 1
-            elif score <= reset_threshold:
-                consecutive_hits = 0
-                armed = True
+                # Debug logging.
+                if debug:
+                    now_dbg = time.time()
+                    if now_dbg - last_debug >= debug_every_s:
+                        last_debug = now_dbg
+                        try:
+                            rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2)))
+                            best_name, best_score = max(scores.items(), key=lambda kv: float(kv[1]))
+                            print(f"[wakeword] rms={rms:.0f}  best={best_name}:{float(best_score):.3f}")
+                        except Exception:
+                            pass
 
-            if armed and consecutive_hits >= required_hits:
-                armed = False
-                consecutive_hits = 0
-                last_trigger_time = now
-                print(f"Wake word detected! ({score:.2f})")
-                mic_stream.stop_stream()
-                try:
-                    callback(selected_device_index)
-                except Exception as exc:
-                    print(f"Wake word callback failed: {exc}")
-                finally:
-                    try:
-                        mic_stream.start_stream()
-                    except Exception:
-                        return
+                # Scoring / debounce.
+                now = time.time()
+                if now - last_trigger < cooldown_seconds:
+                    continue
+
+                for model_name, score in scores.items():
+                    score_f = float(score)
+                    if score_f >= trigger_threshold and armed:
+                        consecutive_hits += 1
+                    elif score_f <= reset_threshold:
+                        consecutive_hits = 0
+                        armed = True
+
+                    if armed and consecutive_hits >= required_hits:
+                        armed            = False
+                        consecutive_hits = 0
+                        last_trigger     = now
+                        triggered        = True
+                        print(f"[wakeword] 🎙️  Wake word detected! ({score_f:.2f})")
+                        break
+
+                if triggered:
+                    break
+
+        except Exception as exc:
+            print(f"[wakeword] stream error: {exc}")
+
+        finally:
+            # CRITICAL: fully release the device before STT opens it.
+            _close_mic(pa, stream)
+
+        if triggered:
+            # Small gap so the OS fully releases the device.
+            time.sleep(0.10)
+            try:
+                with mic_session():
+                    callback(device_index)
+            except Exception as exc:
+                print(f"[wakeword] callback error: {exc}")
+            # Brief pause before re-arming so the user doesn't re-trigger
+            # immediately after the TTS response.
+            time.sleep(0.50)
+            armed            = True
+            consecutive_hits = 0
 
 
 def start_wake_word_listener(callback: Callable[[int], None]) -> threading.Thread:
-    """Start the wake word listener in a background thread."""
+    """Start the wake word listener in a daemon background thread."""
     thread = threading.Thread(
         target=listen_for_wake_word,
         args=(callback,),
         daemon=True,
+        name="wakeword-listener",
     )
     thread.start()
     return thread

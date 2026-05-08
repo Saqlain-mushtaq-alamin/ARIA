@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
 from dotenv import load_dotenv
 
@@ -51,9 +53,26 @@ def _ensure_model_available(model_path: str) -> None:
     )
 
 
+_LEADING_STATUS_GLYPHS_RE = re.compile(
+    r"^\s*[\u25B6\u2713\u2753\u2757\u26A0\ufe0f]+\s*[-–—]*\s*"
+)
+
+
+def _sanitize_for_tts(text: str) -> str:
+    # Piper input is piped via subprocess; on Windows the default encoding for
+    # text-mode stdin can be a legacy codepage. Normalize + drop decorative glyphs
+    # to avoid encode errors and improve pronunciation.
+    cleaned = unicodedata.normalize("NFKC", text or "")
+    cleaned = cleaned.replace("\ufe0f", "")
+    cleaned = _LEADING_STATUS_GLYPHS_RE.sub("", cleaned)
+    cleaned = " ".join(cleaned.split())
+    return cleaned
+
+
 def speak(text: str, model_path: str | None = None, piper_exe: str | None = None) -> None:
     """Generate speech with Piper and play it back."""
-    if not text.strip():
+    safe_text = _sanitize_for_tts(text)
+    if not safe_text.strip():
         return
 
     _ensure_env_loaded()
@@ -75,8 +94,10 @@ def speak(text: str, model_path: str | None = None, piper_exe: str | None = None
         try:
             subprocess.run(
                 [exe, "--model", model, "--output_file", wav_path],
-                input=text,
+                input=safe_text,
                 text=True,
+                encoding="utf-8",
+                errors="ignore",
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

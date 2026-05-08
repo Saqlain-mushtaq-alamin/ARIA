@@ -164,10 +164,12 @@ def _handle_wake_word(device_index: int) -> None:
     # user doesn't need to say the wake word before every follow-up command.
     session_seconds = float(os.getenv("VOICE_SESSION_SECONDS", "25"))
     max_empty = int(os.getenv("VOICE_SESSION_MAX_EMPTY", "2"))
+    stt_model = os.getenv("VOICE_MODEL", "base").strip() or "base"
 
     if session_seconds <= 0:
         try:
-            text = listen_and_transcribe(input_device_index=device_index)
+            print("[voice] Listening for command...")
+            text = listen_and_transcribe(model_name=stt_model, input_device_index=device_index)
         except Exception as exc:
             print(f"Voice STT failed: {exc}")
             return
@@ -195,7 +197,8 @@ def _handle_wake_word(device_index: int) -> None:
             return
 
         try:
-            text = listen_and_transcribe(input_device_index=device_index)
+            print("[voice] Listening for command...")
+            text = listen_and_transcribe(model_name=stt_model, input_device_index=device_index)
         except Exception as exc:
             print(f"Voice STT failed: {exc}")
             return
@@ -252,12 +255,15 @@ def main() -> None:
     _start_emotion_detector()
 
     voice_mode = os.getenv("VOICE_MODE", "wakeword").strip().lower()
-    if voice_mode in {"always", "continuous"}:
+    def _start_always_listen_thread() -> None:
+        stt_model = os.getenv("VOICE_MODEL", "base").strip() or "base"
+
         def _always_listen_loop() -> None:
             print("Voice mode=always (listening for commands; Ctrl+C to stop).")
             while True:
                 try:
-                    text = listen_and_transcribe(input_device_index=None)
+                    print("[voice] Listening for command...")
+                    text = listen_and_transcribe(model_name=stt_model, input_device_index=None)
                 except Exception as exc:
                     print(f"Voice STT failed: {exc}")
                     time.sleep(1.0)
@@ -281,11 +287,16 @@ def main() -> None:
                     print(f"TTS failed: {exc}")
 
         threading.Thread(target=_always_listen_loop, daemon=True).start()
+
+    if voice_mode in {"always", "continuous"}:
+        _start_always_listen_thread()
     else:
         try:
             start_wake_word_listener(_handle_wake_word)
         except Exception as exc:
             print(f"Wake word listener failed to start: {exc}")
+            print("Falling back to VOICE_MODE=always.")
+            _start_always_listen_thread()
 
     threading.Thread(target=_text_input_loop, daemon=True).start()
     while True:
