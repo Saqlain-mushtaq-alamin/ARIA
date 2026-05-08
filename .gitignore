@@ -32,6 +32,8 @@ data/playwright_profile/
 memory/
 *.db-wal
 *.db-shm
+memory/chroma_db
+
 
 vision/models
 *.task
