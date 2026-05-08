@@ -1,0 +1,502 @@
+"""
+ui/overlay.py — ARIA Always-On-Top HUD Overlay
+Semi-transparent floating panel: task name, mic status, gesture toggle, quick chat input.
+"""
+
+import sys
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QLineEdit, QGraphicsDropShadowEffect,
+    QFrame, QSizeGrip
+)
+from PyQt6.QtCore import (
+    Qt, QTimer, QPropertyAnimation, QEasingCurve,
+    pyqtSignal, QPoint, QRect, QSize, QThread, pyqtProperty
+)
+from PyQt6.QtGui import (
+    QColor, QPainter, QPen, QBrush, QLinearGradient,
+    QFont, QFontDatabase, QPainterPath, QRegion, QCursor
+)
+
+
+# ── Colour tokens ──────────────────────────────────────────────────────────────
+CLR_BG          = QColor(8,  11, 20,  200)   # deep space, 78% opaque
+CLR_SURFACE     = QColor(13, 17, 32,  220)
+CLR_BORDER      = QColor(0,  229, 255, 60)   # cyan dim
+CLR_ACCENT      = QColor(0,  229, 255)        # electric cyan
+CLR_ACCENT2     = QColor(139, 92, 246)        # violet
+CLR_SUCCESS     = QColor(16,  185, 129)       # emerald
+CLR_TEXT        = QColor(226, 232, 240)
+CLR_MUTED       = QColor(100, 116, 139)
+CLR_DANGER      = QColor(239, 68,  68)
+
+
+STYLE_BASE = """
+QWidget {
+    background: transparent;
+    color: #e2e8f0;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+QLineEdit {
+    background: rgba(13, 17, 32, 180);
+    border: 1px solid rgba(0, 229, 255, 80);
+    border-radius: 6px;
+    color: #e2e8f0;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+    selection-background-color: rgba(0, 229, 255, 60);
+}
+QLineEdit:focus {
+    border: 1px solid rgba(0, 229, 255, 200);
+    background: rgba(0, 229, 255, 8);
+}
+QLineEdit::placeholder {
+    color: #475569;
+}
+QPushButton {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 10px;
+    padding: 2px 6px;
+}
+QPushButton:hover {
+    color: #00e5ff;
+}
+"""
+
+
+class PulsingDot(QWidget):
+    """Animated status indicator dot."""
+
+    def __init__(self, color: QColor = CLR_SUCCESS, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(10, 10)
+        self._color  = color
+        self._radius = 4.0
+        self._anim   = QPropertyAnimation(self, b"dotRadius", self)
+        self._anim.setDuration(900)
+        self._anim.setStartValue(3.0)
+        self._anim.setEndValue(5.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.SineCurve)
+        self._anim.setLoopCount(-1)
+        self._anim.start()
+
+    def getDotRadius(self):  return self._radius
+    def setDotRadius(self, v):
+        self._radius = v
+        self.update()
+    dotRadius = pyqtProperty(float, getDotRadius, setDotRadius)
+
+    def setColor(self, color: QColor):
+        self._color = color
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        glow = QColor(self._color)
+        glow.setAlpha(50)
+        p.setBrush(QBrush(glow))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QRect(0, 0, 10, 10))
+        p.setBrush(QBrush(self._color))
+        cx, cy = 5, 5
+        r = self._radius
+        p.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+
+
+class GlowLabel(QLabel):
+    """Label that renders with a soft cyan glow."""
+
+    def __init__(self, text="", glow_color: QColor = CLR_ACCENT, parent=None):
+        super().__init__(text, parent)
+        fx = QGraphicsDropShadowEffect(self)
+        fx.setBlurRadius(12)
+        fx.setOffset(0, 0)
+        fx.setColor(glow_color)
+        self.setGraphicsEffect(fx)
+
+
+class ScanlineOverlay(QWidget):
+    """Subtle scanline texture painted on top of everything."""
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        pen = QPen(QColor(0, 229, 255, 6))
+        pen.setWidth(1)
+        p.setPen(pen)
+        y = 0
+        while y < self.height():
+            p.drawLine(0, y, self.width(), y)
+            y += 3
+
+
+class CornerAccent(QWidget):
+    """Decorative L-shaped corner bracket."""
+
+    def __init__(self, corner: str = "tl", size: int = 14, parent=None):
+        super().__init__(parent)
+        self.corner = corner
+        self.sz     = size
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(CLR_ACCENT, 1.5)
+        p.setPen(pen)
+        s = self.sz - 1
+        if self.corner == "tl":
+            p.drawLine(0, s, 0, 0); p.drawLine(0, 0, s, 0)
+        elif self.corner == "tr":
+            p.drawLine(0, 0, s, 0); p.drawLine(s, 0, s, s)
+        elif self.corner == "bl":
+            p.drawLine(0, 0, 0, s); p.drawLine(0, s, s, s)
+        elif self.corner == "br":
+            p.drawLine(s, 0, s, s); p.drawLine(0, s, s, s)
+
+
+class AriaOverlay(QWidget):
+    """
+    Main always-on-top HUD overlay for ARIA.
+
+    Signals
+    -------
+    command_submitted(str)   — user pressed Enter in the quick-input box
+    gesture_toggled(bool)    — gesture mode turned on/off
+    mic_toggled(bool)        — mic mute toggled
+    """
+
+    command_submitted = pyqtSignal(str)
+    gesture_toggled   = pyqtSignal(bool)
+    mic_toggled       = pyqtSignal(bool)
+
+    # Public state
+    MIC_IDLE      = "IDLE"
+    MIC_LISTENING = "LISTENING"
+    MIC_PROCESSING= "PROCESSING"
+
+    def __init__(self):
+        super().__init__()
+        self._drag_pos      = None
+        self._mic_state     = self.MIC_IDLE
+        self._gesture_on    = False
+        self._mic_muted     = False
+        self._task_name     = "No active task"
+        self._collapsed     = False
+
+        self._init_window()
+        self._build_ui()
+        self._apply_styles()
+
+        # Blink timer for processing state
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._blink_tick)
+        self._blink_phase = True
+
+    # ── Window setup ──────────────────────────────────────────────────────────
+
+    def _init_window(self):
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setMinimumWidth(280)
+        self.resize(310, 170)
+        # Position: top-right of primary screen
+        screen = QApplication.primaryScreen().geometry()
+        self.move(screen.width() - 330, 20)
+
+    # ── UI construction ───────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(8)
+
+        # ── Header row ────────────────────────────────────────────────────────
+        header = QHBoxLayout()
+        header.setSpacing(6)
+
+        self._aria_label = GlowLabel("◈ ARIA", CLR_ACCENT)
+        self._aria_label.setStyleSheet(
+            "font-size: 11px; font-weight: bold; letter-spacing: 3px; color: #00e5ff;"
+        )
+
+        self._version_label = QLabel("v1.0")
+        self._version_label.setStyleSheet(
+            "font-size: 9px; color: #334155; letter-spacing: 1px; margin-top:2px;"
+        )
+
+        self._collapse_btn = QPushButton("▾")
+        self._collapse_btn.setFixedSize(18, 18)
+        self._collapse_btn.setToolTip("Collapse")
+        self._collapse_btn.clicked.connect(self._toggle_collapse)
+
+        self._close_btn = QPushButton("✕")
+        self._close_btn.setFixedSize(18, 18)
+        self._close_btn.setToolTip("Hide overlay")
+        self._close_btn.clicked.connect(self.hide)
+
+        header.addWidget(self._aria_label)
+        header.addWidget(self._version_label)
+        header.addStretch()
+        header.addWidget(self._collapse_btn)
+        header.addWidget(self._close_btn)
+        root.addLayout(header)
+
+        # Divider line
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet("background: qlineargradient("
+            "x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 transparent, stop:0.3 rgba(0,229,255,80),"
+            "stop:0.7 rgba(0,229,255,80), stop:1 transparent);")
+        root.addWidget(line)
+
+        # ── Collapsible body ──────────────────────────────────────────────────
+        self._body = QWidget()
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 4, 0, 0)
+        body_layout.setSpacing(7)
+
+        # Task row
+        task_row = QHBoxLayout()
+        task_icon = QLabel("◎")
+        task_icon.setStyleSheet("color: #8b5cf6; font-size: 10px;")
+        self._task_label = QLabel(self._task_name)
+        self._task_label.setStyleSheet(
+            "color: #e2e8f0; font-size: 11px; font-family: Consolas;"
+        )
+        self._task_label.setWordWrap(False)
+        task_row.addWidget(task_icon)
+        task_row.addWidget(self._task_label)
+        task_row.addStretch()
+        body_layout.addLayout(task_row)
+
+        # Status row (mic + gesture)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+
+        # Mic status
+        self._mic_dot    = PulsingDot(CLR_MUTED)
+        self._mic_label  = QLabel("MIC · IDLE")
+        self._mic_label.setStyleSheet(
+            "font-size: 9px; letter-spacing: 2px; color: #64748b;"
+        )
+        mic_btn = QPushButton("⏺")
+        mic_btn.setToolTip("Toggle mute")
+        mic_btn.setFixedSize(22, 18)
+        mic_btn.setStyleSheet(
+            "font-size: 11px; color:#334155; border:none; background:transparent;"
+        )
+        mic_btn.clicked.connect(self._toggle_mic)
+
+        # Gesture toggle
+        self._gesture_btn = QPushButton("GESTURE  OFF")
+        self._gesture_btn.setCheckable(True)
+        self._gesture_btn.setStyleSheet(self._gesture_style(False))
+        self._gesture_btn.clicked.connect(self._toggle_gesture)
+        self._gesture_btn.setFixedHeight(20)
+
+        status_row.addWidget(self._mic_dot)
+        status_row.addWidget(self._mic_label)
+        status_row.addWidget(mic_btn)
+        status_row.addStretch()
+        status_row.addWidget(self._gesture_btn)
+        body_layout.addLayout(status_row)
+
+        # ── Quick chat input ──────────────────────────────────────────────────
+        chat_row = QHBoxLayout()
+        chat_row.setSpacing(6)
+
+        self._chat_input = QLineEdit()
+        self._chat_input.setPlaceholderText("⌘  Quick command…")
+        self._chat_input.setFixedHeight(28)
+        self._chat_input.returnPressed.connect(self._on_submit)
+
+        send_btn = QPushButton("↵")
+        send_btn.setFixedSize(28, 28)
+        send_btn.setStyleSheet(
+            "background: rgba(0,229,255,15); border: 1px solid rgba(0,229,255,60);"
+            "border-radius:6px; color:#00e5ff; font-size:12px;"
+        )
+        send_btn.clicked.connect(self._on_submit)
+
+        chat_row.addWidget(self._chat_input)
+        chat_row.addWidget(send_btn)
+        body_layout.addLayout(chat_row)
+
+        root.addWidget(self._body)
+
+        # Corner accents (purely decorative, overlaid)
+        self._corners = [
+            CornerAccent("tl", 12, self),
+            CornerAccent("tr", 12, self),
+            CornerAccent("bl", 12, self),
+            CornerAccent("br", 12, self),
+        ]
+
+    # ── Painting ──────────────────────────────────────────────────────────────
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        r = self.rect().adjusted(1, 1, -1, -1)
+
+        # Background
+        p.setBrush(QBrush(CLR_BG))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(r, 10, 10)
+
+        # Border gradient
+        grad = QLinearGradient(0, 0, self.width(), self.height())
+        grad.setColorAt(0.0, QColor(0, 229, 255, 80))
+        grad.setColorAt(0.5, QColor(139, 92, 246, 50))
+        grad.setColorAt(1.0, QColor(0, 229, 255, 30))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        pen = QPen(QBrush(grad), 1.2)
+        p.setPen(pen)
+        p.drawRoundedRect(r, 10, 10)
+
+        # Top accent bar
+        bar_grad = QLinearGradient(20, 0, self.width() - 20, 0)
+        bar_grad.setColorAt(0.0, QColor(0, 229, 255, 0))
+        bar_grad.setColorAt(0.3, QColor(0, 229, 255, 120))
+        bar_grad.setColorAt(0.7, QColor(139, 92, 246, 100))
+        bar_grad.setColorAt(1.0, QColor(0, 229, 255, 0))
+        p.setBrush(QBrush(bar_grad))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(20, 0, self.width() - 40, 2, 1, 1)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        w, h = self.width(), self.height()
+        corners = self._corners
+        corners[0].move(4, 4)
+        corners[1].move(w - 18, 4)
+        corners[2].move(4, h - 18)
+        corners[3].move(w - 18, h - 18)
+
+    # ── Style helpers ─────────────────────────────────────────────────────────
+
+    def _apply_styles(self):
+        self.setStyleSheet(STYLE_BASE)
+
+    @staticmethod
+    def _gesture_style(on: bool) -> str:
+        if on:
+            return (
+                "QPushButton { background: rgba(0,229,255,20); border: 1px solid rgba(0,229,255,150);"
+                " border-radius:4px; color:#00e5ff; font-size:9px; letter-spacing:2px; padding:0 6px; }"
+                "QPushButton:hover { background: rgba(0,229,255,35); }"
+            )
+        return (
+            "QPushButton { background: rgba(30,45,69,80); border: 1px solid rgba(30,45,69,180);"
+            " border-radius:4px; color:#475569; font-size:9px; letter-spacing:2px; padding:0 6px; }"
+            "QPushButton:hover { border-color: rgba(0,229,255,80); color:#64748b; }"
+        )
+
+    # ── Dragging ──────────────────────────────────────────────────────────────
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, _):
+        self._drag_pos = None
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_task(self, name: str):
+        """Update the current task display."""
+        self._task_name = name
+        self._task_label.setText(name)
+
+    def set_mic_state(self, state: str):
+        """
+        state: 'IDLE' | 'LISTENING' | 'PROCESSING'
+        """
+        self._mic_state = state
+        if state == self.MIC_LISTENING:
+            self._mic_dot.setColor(CLR_SUCCESS)
+            self._mic_label.setText("MIC · LISTENING")
+            self._mic_label.setStyleSheet(
+                "font-size:9px; letter-spacing:2px; color:#10b981;"
+            )
+            self._blink_timer.stop()
+        elif state == self.MIC_PROCESSING:
+            self._mic_dot.setColor(CLR_ACCENT)
+            self._mic_label.setText("MIC · PROCESSING")
+            self._mic_label.setStyleSheet(
+                "font-size:9px; letter-spacing:2px; color:#00e5ff;"
+            )
+            self._blink_timer.start(450)
+        else:
+            self._mic_dot.setColor(CLR_MUTED)
+            self._mic_label.setText("MIC · IDLE")
+            self._mic_label.setStyleSheet(
+                "font-size:9px; letter-spacing:2px; color:#64748b;"
+            )
+            self._blink_timer.stop()
+
+    def set_opacity(self, value: float):
+        """0.0 – 1.0"""
+        self.setWindowOpacity(max(0.1, min(1.0, value)))
+
+    # ── Private slots ─────────────────────────────────────────────────────────
+
+    def _on_submit(self):
+        text = self._chat_input.text().strip()
+        if text:
+            self.command_submitted.emit(text)
+            self._chat_input.clear()
+
+    def _toggle_gesture(self, checked: bool):
+        self._gesture_on = checked
+        self._gesture_btn.setText(f"GESTURE  {'ON' if checked else 'OFF'}")
+        self._gesture_btn.setStyleSheet(self._gesture_style(checked))
+        self.gesture_toggled.emit(checked)
+
+    def _toggle_mic(self):
+        self._mic_muted = not self._mic_muted
+        self.mic_toggled.emit(not self._mic_muted)
+        if self._mic_muted:
+            self._mic_dot.setColor(CLR_DANGER)
+            self._mic_label.setText("MIC · MUTED")
+            self._mic_label.setStyleSheet(
+                "font-size:9px; letter-spacing:2px; color:#ef4444;"
+            )
+
+    def _toggle_collapse(self):
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        self._collapse_btn.setText("▸" if self._collapsed else "▾")
+        self.adjustSize()
+
+    def _blink_tick(self):
+        self._blink_phase = not self._blink_phase
+        color = CLR_ACCENT if self._blink_phase else CLR_MUTED
+        self._mic_dot.setColor(color)
+
+
+# ── Standalone demo ───────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    w = AriaOverlay()
+    w.show()
+    w.set_task("Drafting weekly report")
+    w.set_mic_state(AriaOverlay.MIC_LISTENING)
+    sys.exit(app.exec())
