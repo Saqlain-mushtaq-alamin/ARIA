@@ -68,6 +68,21 @@ try:
 except Exception:
     search_memory = None
 
+try:
+    from vision.screen_reader import (
+        start_screen_reader,
+        get_screen_context_block,
+        llm_busy_context,
+    )
+    _SCREEN_READER_AVAILABLE = True
+except Exception:
+    _SCREEN_READER_AVAILABLE = False
+    def get_screen_context_block() -> str:          # type: ignore[misc]
+        return ""
+    def llm_busy_context():                          # type: ignore[misc]
+        from contextlib import nullcontext
+        return nullcontext()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LangChain tool wrappers (kept for external tool-call compatibility)
@@ -237,7 +252,10 @@ def _build_context_prompt(prompt: str) -> str:
         except Exception:
             pass
 
-    parts = [p for p in [vibe_block, memory_block] if p]
+    # Screen activity context (LLaVA screen reader — no image stored)
+    screen_block = get_screen_context_block()
+
+    parts = [p for p in [vibe_block, memory_block, screen_block] if p]
     if not parts:
         return prompt
     return "Context (use only if relevant):\n\n" + "\n\n".join(parts) + f"\n\nUser: {prompt}"
@@ -255,7 +273,8 @@ def _generate_step_content(step: dict) -> dict:
 
     step_intent = step.get("intent", "")
     prompt_text = str(params.get("prompt") or params.get("text") or "Write the requested content.")
-    generated = generate_text(_build_context_prompt(prompt_text)).strip()
+    with llm_busy_context():
+        generated = generate_text(_build_context_prompt(prompt_text)).strip()
 
     # Clone the step so we don't mutate the original
     new_params = dict(params)
@@ -487,7 +506,8 @@ def process_text_stream(
     try:
         if is_conversational(user_text):
             augmented = _build_context_prompt(user_text)
-            reply = generate_text(augmented).strip()
+            with llm_busy_context():
+                reply = generate_text(augmented).strip()
             yield reply or "I'm not sure how to respond to that."
             return
     except Exception:
@@ -519,7 +539,9 @@ def process_text_stream(
         if classified.get("intent") in {"conversational", "answer_question"}:
             prompt = classified.get("parameters", {}).get("prompt") or user_text
             augmented = _build_context_prompt(prompt)
-            yield generate_text(augmented).strip() or "I'm not sure how to respond."
+            with llm_busy_context():
+                _reply = generate_text(augmented).strip()
+            yield _reply or "I'm not sure how to respond."
             return
 
         payload = classified
@@ -546,7 +568,8 @@ def process_text_stream(
     if intent in {"answer_question", "type_generated_text"}:
         prompt = (payload.get("parameters") or {}).get("prompt") or user_text
         augmented = _build_context_prompt(prompt)
-        generated = generate_text(augmented).strip()
+        with llm_busy_context():
+            generated = generate_text(augmented).strip()
         if not generated:
             yield "No response generated."
             return
