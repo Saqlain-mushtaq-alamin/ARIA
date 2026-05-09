@@ -79,7 +79,7 @@ except Exception:
     _SCREEN_READER_AVAILABLE = False
     def get_screen_context_block() -> str:          # type: ignore[misc]
         return ""
-    def llm_busy_context():                          # type: ignore[misc]
+    def llm_busy_context() -> Any:                   # type: ignore[misc]
         from contextlib import nullcontext
         return nullcontext()
 
