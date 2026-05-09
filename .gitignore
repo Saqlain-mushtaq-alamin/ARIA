@@ -29,9 +29,7 @@ Thumbs.db
 data/playwright_profile/
 
 # Runtime memory / SQLite artifacts
-memory/
-*.db-wal
-*.db-shm
+ 
  
 
 
