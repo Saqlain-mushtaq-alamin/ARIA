@@ -306,8 +306,23 @@ class AriaDesktopUi:
         if not cleaned:
             return
 
+        # If user uses overlay quick command, bring the chat panel up so they
+        # can see the conversation like a messenger.
+        if source == "overlay":
+            self._show_chat()
+
         self._signals.tray_state.emit("processing")
         self._signals.overlay_mic_state.emit(AriaOverlay.MIC_PROCESSING)
+
+        # Add the user's message immediately for non-chat sources.
+        # (The chat window already renders the user's bubble before emitting
+        # message_sent, so we must not duplicate it.)
+        if source != "chat":
+            self._signals.chat_add.emit("user", cleaned)
+            try:
+                self.chat.show_typing(0)
+            except Exception:
+                pass
 
         def _run() -> None:
             try:
@@ -315,7 +330,6 @@ class AriaDesktopUi:
             except Exception as exc:
                 response = f"Error while processing: {exc}"
 
-            self._signals.chat_add.emit("user", cleaned)
             self._signals.chat_add.emit("aria", response)
             self._signals.tray_state.emit("idle" if self.voice.is_enabled() else "muted")
             self._signals.overlay_mic_state.emit(AriaOverlay.MIC_IDLE)

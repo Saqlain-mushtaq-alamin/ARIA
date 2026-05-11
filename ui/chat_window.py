@@ -526,20 +526,55 @@ class AriaChatWindow(QWidget):
         Append a message bubble.
         role: 'user' | 'aria' | 'system'
         """
+        # If a response arrives, hide any "thinking" indicator.
+        if role == "aria":
+            try:
+                self._typing_timer.stop()
+            except Exception:
+                pass
+            self._typing_label.hide()
+
         ts = datetime.now().strftime("%H:%M")
         bubble = MessageBubble(role, text, ts)
+
+        # Telegram/WhatsApp style: user on right, ARIA on left.
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setSpacing(0)
+
+        # Keep bubbles readable (don't span full width).
+        bubble.setMaximumWidth(460)
+        try:
+            bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        except Exception:
+            pass
+
+        if role == "user":
+            row_lay.addStretch(1)
+            row_lay.addWidget(bubble, 0)
+        else:
+            row_lay.addWidget(bubble, 0)
+            row_lay.addStretch(1)
+
         # Insert before the trailing stretch
         idx = self._messages_layout.count() - 1
-        self._messages_layout.insertWidget(idx, bubble)
+        self._messages_layout.insertWidget(idx, row)
         # Auto-scroll to bottom
         QTimer.singleShot(50, lambda: self._messages_scroll.verticalScrollBar().setValue(
             self._messages_scroll.verticalScrollBar().maximum()
         ))
 
     def show_typing(self, duration_ms: int = 3000):
-        """Show 'ARIA is thinking…' indicator for given ms."""
+        """Show 'ARIA is thinking…' indicator.
+
+        If duration_ms <= 0, keep it visible until a response arrives.
+        """
         self._typing_label.show()
-        self._typing_timer.start(duration_ms)
+        if duration_ms and duration_ms > 0:
+            self._typing_timer.start(duration_ms)
+        else:
+            self._typing_timer.stop()
 
     def _hide_typing(self):
         self._typing_label.hide()
@@ -590,7 +625,8 @@ class AriaChatWindow(QWidget):
             self.add_message("user", text)
             self.message_sent.emit(text)
             self._input.clear()
-            self.show_typing(2000)
+            # Keep thinking indicator on until runtime adds ARIA reply.
+            self.show_typing(0)
 
     def _on_task_complete(self, task_id: str):
         self.task_completed.emit(task_id)

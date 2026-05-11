@@ -28,8 +28,15 @@ Thumbs.db
 # Playwright / browser profile (runtime-generated, can be locked by the browser)
 data/playwright_profile/
 
-# Runtime memory / SQLite artifacts
-memory/
+# Runtime memory artifacts (generated at runtime; keep memory/*.py tracked)
+memory/chroma_db/
+memory/*.db
+memory/*.sqlite3
+memory/*.sqlite3-*
+memory/*.json
+memory/*.jpg
+memory/*.jpeg
+memory/*.png
 *.db-wal
 *.db-shm
  
