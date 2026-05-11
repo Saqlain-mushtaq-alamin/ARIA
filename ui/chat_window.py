@@ -416,11 +416,13 @@ class AriaChatWindow(QWidget):
         send_btn = QPushButton("↵ SEND")
         send_btn.setFixedSize(80, 38)
         send_btn.setStyleSheet(
+            "QPushButton {"
             "background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             "stop:0 rgba(0,229,255,30), stop:1 rgba(139,92,246,30));"
             "border: 1px solid rgba(0,229,255,100);"
             "border-radius: 8px; color:#00e5ff;"
             "font-size:10px; letter-spacing:1px; font-family:Consolas;"
+            "}"
             "QPushButton:hover { background: rgba(0,229,255,50); }"
         )
         send_btn.clicked.connect(self._on_send)
