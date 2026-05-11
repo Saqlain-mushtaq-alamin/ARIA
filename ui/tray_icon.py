@@ -336,6 +336,25 @@ class AriaTrayIcon(QSystemTrayIcon):
             self._pulse_timer.stop()
             self.setIcon(icon)
 
+    def set_voice_enabled(self, enabled: bool):
+        """Sync the voice toggle state without emitting voice_toggled."""
+        self._voice_enabled = bool(enabled)
+        try:
+            self._voice_action.blockSignals(True)
+            self._voice_action.setChecked(self._voice_enabled)
+        finally:
+            self._voice_action.blockSignals(False)
+        self.set_state("idle" if self._voice_enabled else "muted")
+
+    def set_gesture_enabled(self, enabled: bool):
+        """Sync the gesture toggle state without emitting gesture_toggled."""
+        self._gesture_enabled = bool(enabled)
+        try:
+            self._gesture_action.blockSignals(True)
+            self._gesture_action.setChecked(self._gesture_enabled)
+        finally:
+            self._gesture_action.blockSignals(False)
+
     def show_notification(self, title: str, message: str,
                           duration_ms: int = 3000):
         """Show a system tray balloon notification."""

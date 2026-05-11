@@ -455,6 +455,31 @@ class AriaOverlay(QWidget):
         """0.0 – 1.0"""
         self.setWindowOpacity(max(0.1, min(1.0, value)))
 
+    def set_voice_enabled(self, enabled: bool):
+        """Sync the overlay mic toggle state from an external controller."""
+        self._mic_muted = not enabled
+        if not enabled:
+            self._mic_dot.setColor(CLR_DANGER)
+            self._mic_label.setText("MIC · MUTED")
+            self._mic_label.setStyleSheet(
+                "font-size:9px; letter-spacing:2px; color:#ef4444;"
+            )
+            self._blink_timer.stop()
+        else:
+            # Restore visual state based on current mic state.
+            self.set_mic_state(self._mic_state)
+
+    def set_gesture_enabled(self, enabled: bool):
+        """Sync the gesture toggle from an external controller."""
+        self._gesture_on = bool(enabled)
+        self._gesture_btn.blockSignals(True)
+        try:
+            self._gesture_btn.setChecked(self._gesture_on)
+            self._gesture_btn.setText(f"GESTURE  {'ON' if self._gesture_on else 'OFF'}")
+            self._gesture_btn.setStyleSheet(self._gesture_style(self._gesture_on))
+        finally:
+            self._gesture_btn.blockSignals(False)
+
     # ── Private slots ─────────────────────────────────────────────────────────
 
     def _on_submit(self):

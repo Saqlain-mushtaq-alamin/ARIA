@@ -630,6 +630,124 @@ def mark_task_complete(
     return state
 
 
+def upsert_day_task(
+    task_name: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    completed: bool = False,
+    task_type: str = "fixed",
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> dict[str, Any]:
+    """Create/update a task entry for the day.
+
+    This is intended for UI callers (scheduler view) that want a lightweight
+    persistence mechanism without re-optimizing the whole plan.
+    """
+
+    day_key = day or _today_iso()
+    state = load_state(path)
+    tasks_by_day: dict[str, Any] = state.setdefault("tasks", {})
+    day_tasks: dict[str, Any] = tasks_by_day.setdefault(day_key, {})
+
+    raw = str(task_name or "").strip()
+    key = _normalize_key(raw) or "task"
+
+    entry = day_tasks.get(key)
+    if not isinstance(entry, dict):
+        entry = {
+            "task": raw or key,
+            "type": task_type,
+            "start": start,
+            "end": end,
+            "completed": False,
+            "completed_at": None,
+        }
+
+    entry["task"] = raw or entry.get("task") or key
+    entry["type"] = task_type
+    entry["start"] = start
+    entry["end"] = end
+    entry["completed"] = bool(completed)
+    if completed and not entry.get("completed_at"):
+        entry["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    if not completed:
+        entry["completed_at"] = None
+
+    day_tasks[key] = entry
+    save_state(state, path)
+    return state
+
+
+def delete_day_task(
+    task_id_or_name: str,
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> dict[str, Any]:
+    """Delete a task entry for the day (by key or task text)."""
+
+    day_key = day or _today_iso()
+    state = load_state(path)
+    day_tasks: dict[str, Any] = (state.get("tasks") or {}).get(day_key) or {}
+
+    raw = str(task_id_or_name or "").strip()
+    key = _normalize_key(raw)
+
+    # Try direct key first.
+    if key in day_tasks:
+        day_tasks.pop(key, None)
+        save_state(state, path)
+        return state
+
+    # Otherwise, try matching by stored display name.
+    for k, obj in list(day_tasks.items()):
+        if _normalize_key(str((obj or {}).get("task") or "")) == key:
+            day_tasks.pop(k, None)
+            save_state(state, path)
+            return state
+
+    return state
+
+
+def set_day_task_completed(
+    task_name: str,
+    *,
+    completed: bool,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> dict[str, Any]:
+    """Mark a task complete/incomplete for the day."""
+
+    if completed:
+        return mark_task_complete(task_name, day=day, path=path)
+
+    day_key = day or _today_iso()
+    state = load_state(path)
+    day_tasks: dict[str, Any] = (state.get("tasks") or {}).setdefault(day_key, {})
+    raw = str(task_name or "").strip()
+    key = _normalize_key(raw)
+
+    obj = day_tasks.get(key)
+    if not isinstance(obj, dict):
+        # Nothing to un-complete; create a stub.
+        day_tasks[key] = {
+            "task": raw or key,
+            "type": "flexible",
+            "start": None,
+            "end": None,
+            "completed": False,
+            "completed_at": None,
+        }
+    else:
+        obj["completed"] = False
+        obj["completed_at"] = None
+
+    save_state(state, path)
+    return state
+
+
 def record_habit(
     habit_name: str,
     *,

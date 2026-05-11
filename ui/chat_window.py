@@ -549,6 +549,25 @@ class AriaChatWindow(QWidget):
         self._task_chips[task_id] = chip
         self._tasks_layout.addWidget(chip)
 
+    def clear_tasks(self):
+        """Remove all task chips from the sidebar."""
+        for chip in list(self._task_chips.values()):
+            try:
+                self._tasks_layout.removeWidget(chip)
+            except Exception:
+                pass
+            chip.deleteLater()
+        self._task_chips.clear()
+
+    def set_tasks(self, tasks: list[tuple[str, str, str, bool]]):
+        """Replace sidebar task chips.
+
+        tasks: list of (task_id, text, priority, done)
+        """
+        self.clear_tasks()
+        for task_id, text, priority, done in tasks:
+            self.add_task(task_id, text, priority=priority, done=done)
+
     def add_suggestion(self, text: str, icon: str = "◈"):
         """Add a proactive suggestion card."""
         card = SuggestionCard(text, icon)

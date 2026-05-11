@@ -719,7 +719,7 @@ class AriaSchedulerView(QWidget):
     task_deleted   = pyqtSignal(str)
     task_completed = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, *, load_demo: bool = True):
         super().__init__()
         self._drag_pos = None
         self._tasks: dict[str, ScheduledTask] = {}
@@ -728,7 +728,17 @@ class AriaSchedulerView(QWidget):
         self._init_window()
         self._build_ui()
         self.setStyleSheet(GLOBAL_STYLE)
-        self._load_demo_tasks()
+        if load_demo:
+            self._load_demo_tasks()
+
+    def set_tasks(self, tasks: list[ScheduledTask]):
+        """Replace all tasks in the timeline."""
+        self._tasks = {t.id: t for t in tasks}
+        self._canvas.set_tasks(list(self._tasks.values()))
+        self._refresh_stats()
+
+    def get_task(self, task_id: str) -> Optional[ScheduledTask]:
+        return self._tasks.get(task_id)
 
     # ── Window init ───────────────────────────────────────────────────────────
 

@@ -99,7 +99,11 @@ def _close_mic(pa: pyaudio.PyAudio, stream: pyaudio.Stream) -> None:
 # Listener
 # ---------------------------------------------------------------------------
 
-def listen_for_wake_word(callback: Callable[[int], None]) -> None:
+def listen_for_wake_word(
+    callback: Callable[[int], None],
+    *,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
     """
     Continuously listen for the configured wake word and invoke *callback*.
 
@@ -140,6 +144,8 @@ def listen_for_wake_word(callback: Callable[[int], None]) -> None:
     last_debug       = 0.0
 
     while True:
+        if stop_event is not None and stop_event.is_set():
+            return
         # ---- Open mic (or re-open after a session) -----------------------
         try:
             pa, stream = _open_mic(device_index)
@@ -152,6 +158,8 @@ def listen_for_wake_word(callback: Callable[[int], None]) -> None:
         triggered = False
         try:
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    return
                 # Don't fight STT for the device.
                 if _mic_busy.is_set():
                     time.sleep(0.05)
@@ -205,6 +213,9 @@ def listen_for_wake_word(callback: Callable[[int], None]) -> None:
             # CRITICAL: fully release the device before STT opens it.
             _close_mic(pa, stream)
 
+        if stop_event is not None and stop_event.is_set():
+            return
+
         if triggered:
             # Small gap so the OS fully releases the device.
             time.sleep(0.10)
@@ -220,11 +231,16 @@ def listen_for_wake_word(callback: Callable[[int], None]) -> None:
             consecutive_hits = 0
 
 
-def start_wake_word_listener(callback: Callable[[int], None]) -> threading.Thread:
+def start_wake_word_listener(
+    callback: Callable[[int], None],
+    *,
+    stop_event: Optional[threading.Event] = None,
+) -> threading.Thread:
     """Start the wake word listener in a daemon background thread."""
     thread = threading.Thread(
         target=listen_for_wake_word,
         args=(callback,),
+        kwargs={"stop_event": stop_event},
         daemon=True,
         name="wakeword-listener",
     )
