@@ -15,7 +15,6 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -342,10 +341,7 @@ class AriaDesktopUi:
         # Chat sidebar tasks
         try:
             state = tracker.load_state()
-            day_key = tracker.date.today().isoformat() if hasattr(tracker, "date") else None  # defensive
-            if day_key is None:
-                # Fall back to tracker internals
-                day_key = getattr(tracker, "_today_iso")()
+            day_key = getattr(tracker, "_today_iso")()
             day_tasks = (state.get("tasks") or {}).get(day_key) or {}
 
             tasks_payload = []
@@ -432,7 +428,8 @@ class AriaDesktopUi:
 
     def _on_scheduler_task_deleted(self, task_id: str) -> None:
         try:
-            tracker.delete_day_task(task_id)
+            t = self.scheduler.get_task(task_id)
+            tracker.delete_day_task((t.title if t else task_id))
         except Exception:
             pass
         self._signals.refresh_tasks.emit()

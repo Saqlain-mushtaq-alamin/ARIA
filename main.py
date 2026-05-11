@@ -1,5 +1,6 @@
 """ARIA assistant entry point."""
 
+import argparse
 import os
 import sys
 import subprocess
@@ -249,10 +250,8 @@ def _text_input_loop() -> None:
             print(f"TTS failed: {exc}")
 
 
-def main() -> None:
-    _load_env()
-    _ensure_cache_dirs()
-    _start_emotion_detector()
+def _run_headless() -> None:
+    """Legacy non-UI entrypoint (voice + stdin loop)."""
 
     voice_mode = os.getenv("VOICE_MODE", "wakeword").strip().lower()
     def _start_always_listen_thread() -> None:
@@ -303,5 +302,33 @@ def main() -> None:
         time.sleep(0.5)
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="ARIA assistant")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without PyQt UI (legacy terminal + voice loop).",
+    )
+    args = parser.parse_args(argv)
+
+    _load_env()
+    _ensure_cache_dirs()
+    _start_emotion_detector()
+
+    headless = bool(args.headless) or os.getenv("ARIA_HEADLESS", "").strip().lower() in {"1", "true", "yes", "on"}
+    if headless:
+        _run_headless()
+        return 0
+
+    try:
+        from ui.app_runtime import run_ui
+    except Exception as exc:
+        print(f"UI failed to import ({exc}). Falling back to --headless mode.")
+        _run_headless()
+        return 0
+
+    return int(run_ui())
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
