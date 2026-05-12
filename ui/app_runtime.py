@@ -222,6 +222,9 @@ class AriaDesktopUi:
         self._refresh_task_views()
         self._start_task_poll()
 
+        # Optional: vision screen reader (LLaVA via Ollama) for stuck detection.
+        self._start_screen_reader()
+
     # ── Wiring ───────────────────────────────────────────────────────────
 
     def _wire_signals(self) -> None:
@@ -256,6 +259,30 @@ class AriaDesktopUi:
         self._signals.notification.connect(self.tray.show_notification)
         self._signals.refresh_tasks.connect(self._refresh_task_views)
         self._signals.scheduler_reload.connect(self._reload_scheduler_from_tracker)
+
+    def _start_screen_reader(self) -> None:
+        try:
+            from vision.screen_reader import start_screen_reader
+        except Exception:
+            return
+
+        def _proactive(msg: str) -> None:
+            # Route proactive suggestions into the chat without stealing focus.
+            try:
+                self._signals.chat_add.emit("aria", msg)
+            except Exception:
+                pass
+            # Also show a lightweight notification so it isn't missed.
+            try:
+                self._signals.notification.emit("ARIA", msg)
+            except Exception:
+                pass
+
+        try:
+            start_screen_reader(proactive_callback=_proactive)
+        except Exception:
+            # Keep UI resilient if dependencies (Pillow/mss/Ollama) are missing.
+            return
 
     # ── UI actions ────────────────────────────────────────────────────────
 

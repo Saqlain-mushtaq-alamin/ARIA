@@ -63,6 +63,14 @@ def _try_activate_kinetic_mode(text: str) -> Optional[str]:
 
 
 def _ensure_cache_dirs() -> None:
+    # Keep DeepFace weights inside the repo by default.
+    try:
+        repo_root = Path(__file__).resolve().parent
+        default_deepface_home = repo_root / "vision" / "models" / "deepface"
+        os.environ.setdefault("DEEPFACE_HOME", str(default_deepface_home))
+    except Exception:
+        pass
+
     for key in ("HF_HOME", "TRANSFORMERS_CACHE", "TORCH_HOME", "PIP_CACHE_DIR"):
         path = os.getenv(key)
         if not path:
@@ -71,6 +79,14 @@ def _ensure_cache_dirs() -> None:
             os.makedirs(path, exist_ok=True)
         except Exception:
             pass
+
+    # Also ensure DeepFace cache dir exists.
+    try:
+        df_home = os.getenv("DEEPFACE_HOME")
+        if df_home:
+            os.makedirs(df_home, exist_ok=True)
+    except Exception:
+        pass
 
 
 def _load_env() -> None:
@@ -317,6 +333,13 @@ def main(argv: list[str] | None = None) -> int:
 
     headless = bool(args.headless) or os.getenv("ARIA_HEADLESS", "").strip().lower() in {"1", "true", "yes", "on"}
     if headless:
+        try:
+            from vision.screen_reader import start_screen_reader
+
+            # In headless mode, speak proactive suggestions (when available).
+            start_screen_reader(proactive_callback=speak)
+        except Exception:
+            pass
         _run_headless()
         return 0
 

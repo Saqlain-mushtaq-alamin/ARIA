@@ -57,6 +57,10 @@ class EmotionDetectorConfig:
     # Output/state paths
     emotion_state_path: str = os.path.join("memory", "emotion_state.json")
 
+    # DeepFace caches weights on disk; keep it inside the repo by default.
+    # Users can override with DEEPFACE_HOME env var.
+    deepface_home: str = os.path.join(os.path.dirname(__file__), "models", "deepface")
+
     # Publishing
     store_snapshots_to_vector_memory: bool = True
     store_window_summaries_to_vector_memory: bool = True
@@ -165,8 +169,16 @@ def _deepface_analyze_emotion(
     frame_bgr: "Any",
     detector_backend: str,
     enforce_detection: bool,
+    deepface_home: str | None = None,
 ) -> Optional[Dict[str, float]]:
     # Returns DeepFace's base emotion scores dict (7-class) as floats.
+    if deepface_home:
+        # Set before import so DeepFace picks it up.
+        os.environ.setdefault("DEEPFACE_HOME", str(deepface_home))
+        try:
+            os.makedirs(os.environ["DEEPFACE_HOME"], exist_ok=True)
+        except Exception:
+            pass
     try:
         from deepface import DeepFace  # type: ignore
     except Exception:
@@ -359,6 +371,7 @@ class EmotionDetector:
             frame,
             detector_backend=self.config.detector_backend,
             enforce_detection=self.config.enforce_detection,
+            deepface_home=self.config.deepface_home,
         )
         if not base:
             return None, None

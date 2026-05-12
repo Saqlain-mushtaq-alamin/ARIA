@@ -33,6 +33,11 @@ from typing import Any, Dict, Generator, List, Optional
 
 import ollama
 
+try:
+    from vision.screen_reader import llm_busy_context
+except Exception:
+    from contextlib import nullcontext as llm_busy_context  # type: ignore
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,14 +100,15 @@ def _chat(
     max_tokens: int = 2048,
 ) -> str:
     """Send messages to Ollama and return the assistant reply as a string."""
-    response = ollama.chat(
-        model=model,
-        messages=messages,
-        options={
-            "temperature": temperature,
-            "num_predict": max_tokens,
-        },
-    )
+    with llm_busy_context():
+        response = ollama.chat(
+            model=model,
+            messages=messages,
+            options={
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        )
     content = response.get("message", {}).get("content", "")
     return str(content).strip()
 
@@ -113,16 +119,17 @@ def _chat_stream(
     temperature: float = 0.7,
 ) -> Generator[str, None, None]:
     """Stream tokens from Ollama one chunk at a time."""
-    stream = ollama.chat(
-        model=model,
-        messages=messages,
-        stream=True,
-        options={"temperature": temperature},
-    )
-    for chunk in stream:
-        token = chunk.get("message", {}).get("content", "")
-        if token:
-            yield token
+    with llm_busy_context():
+        stream = ollama.chat(
+            model=model,
+            messages=messages,
+            stream=True,
+            options={"temperature": temperature},
+        )
+        for chunk in stream:
+            token = chunk.get("message", {}).get("content", "")
+            if token:
+                yield token
 
 
 def _build_messages(

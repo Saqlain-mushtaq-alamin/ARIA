@@ -18,6 +18,11 @@ from typing import Any, Dict, List
 
 import ollama
 
+try:
+    from vision.screen_reader import llm_busy_context
+except Exception:
+    from contextlib import nullcontext as llm_busy_context  # type: ignore
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage-1 prompt: conversational vs actionable
@@ -158,14 +163,15 @@ def _extract_json(text: str) -> Dict[str, Any] | None:
 
 def _call_ollama(system: str, user: str, model: str) -> str:
     """Call Ollama and return the raw content string."""
-    response = ollama.chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        options={"temperature": 0},
-    )
+    with llm_busy_context():
+        response = ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            options={"temperature": 0},
+        )
     return response.get("message", {}).get("content", "").strip()
 
 
