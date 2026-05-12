@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect, QRectF,
     pyqtSignal, QSize, QPoint, QPointF, QTime, QMimeData,
-    pyqtProperty, QEvent
+    QEvent
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient,
@@ -278,7 +278,7 @@ class TaskDialog(QDialog):
             "notes":    self._notes.text().strip(),
         }
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(1, 1, -1, -1)
@@ -380,7 +380,7 @@ class TimelineCanvas(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -389,7 +389,7 @@ class TimelineCanvas(QWidget):
         self._draw_grid(p)
         self._draw_tasks(p)
         self._draw_now_line(p)
-        if self._drag_task and self._drag_time:
+        if self._drag_task is not None and self._drag_time is not None:
             self._draw_drag_ghost(p)
 
     def _draw_background(self, p: QPainter):
@@ -553,7 +553,7 @@ class TimelineCanvas(QWidget):
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_drag_ghost(self, p: QPainter):
-        if not self._drag_task or not self._drag_time:
+        if self._drag_task is None or self._drag_time is None:
             return
         ghost = ScheduledTask(
             id=self._drag_task.id,
@@ -573,40 +573,44 @@ class TimelineCanvas(QWidget):
 
     # ── Mouse events ──────────────────────────────────────────────────────────
 
-    def mousePressEvent(self, e: QMouseEvent):
-        task = self._task_at(e.pos())
-        if e.button() == Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, a0: Optional[QMouseEvent]):
+        if a0 is None:
+            return
+        task = self._task_at(a0.pos())
+        if a0.button() == Qt.MouseButton.LeftButton:
             if task:
                 # Check if click is on the right edge (complete button zone)
                 trect = self._task_rect(task)
-                if e.pos().x() > trect.right() - 28:
+                if a0.pos().x() > trect.right() - 28:
                     task.done = not task.done
                     self.task_completed.emit(task.id)
                     self.update()
                     return
                 # Start drag
                 self._drag_task   = task
-                click_y           = e.pos().y()
+                click_y           = a0.pos().y()
                 task_y            = self._y_for_minutes(task.start_minutes())
                 self._drag_offset = self._minutes_for_y(click_y - task_y)
                 self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             else:
                 # Empty slot clicked → emit add signal
-                snapped_min = self._minutes_for_y(e.pos().y())
+                snapped_min = self._minutes_for_y(a0.pos().y())
                 self.slot_clicked.emit(QTime(snapped_min // 60, snapped_min % 60))
 
-        elif e.button() == Qt.MouseButton.RightButton and task:
+        elif a0.button() == Qt.MouseButton.RightButton and task:
             self.task_clicked.emit(task.id)
 
-    def mouseMoveEvent(self, e: QMouseEvent):
-        if self._drag_task:
-            raw_y       = e.pos().y()
+    def mouseMoveEvent(self, a0: Optional[QMouseEvent]):
+        if a0 is None:
+            return
+        if self._drag_task is not None:
+            raw_y       = a0.pos().y()
             raw_min     = self._minutes_for_y(raw_y) - self._drag_offset
             snapped_min = max(0, raw_min - (raw_min % 5))
             self._drag_time = QTime(snapped_min // 60 % 24, snapped_min % 60)
             self.update()
         else:
-            task = self._task_at(e.pos())
+            task = self._task_at(a0.pos())
             new_hover = task.id if task else None
             if new_hover != self._hover_task:
                 self._hover_task = new_hover
@@ -616,8 +620,8 @@ class TimelineCanvas(QWidget):
                 )
                 self.update()
 
-    def mouseReleaseEvent(self, e: QMouseEvent):
-        if self._drag_task and self._drag_time:
+    def mouseReleaseEvent(self, a0: Optional[QMouseEvent]):
+        if self._drag_task is not None and self._drag_time is not None:
             self._drag_task.start = self._drag_time
             self.task_moved.emit(self._drag_task.id, self._drag_time)
         self._drag_task  = None
@@ -692,7 +696,7 @@ class StatStrip(QWidget):
                 f"font-size:16px; font-weight:bold; color:{col}; font-family:Consolas;"
             )
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(13, 17, 32))
         p.setBrush(QBrush(QColor(30, 45, 69, 80)))
@@ -750,11 +754,13 @@ class AriaSchedulerView(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(720, 640)
-        screen = QApplication.primaryScreen().geometry()
-        self.move(
-            screen.width() // 2 - 360,
-            screen.height() // 2 - 320
-        )
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.geometry()
+            self.move(
+                geo.width() // 2 - 360,
+                geo.height() // 2 - 320
+            )
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -889,7 +895,7 @@ class AriaSchedulerView(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(1, 1, -1, -1)
@@ -917,15 +923,19 @@ class AriaSchedulerView(QWidget):
 
     # ── Dragging window ───────────────────────────────────────────────────────
 
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 44:
-            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def mousePressEvent(self, a0: Optional[QMouseEvent]):
+        if a0 is None:
+            return
+        if a0.button() == Qt.MouseButton.LeftButton and a0.position().y() < 44:
+            self._drag_pos = a0.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
-    def mouseMoveEvent(self, e):
-        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
+    def mouseMoveEvent(self, a0: Optional[QMouseEvent]):
+        if a0 is None:
+            return
+        if self._drag_pos is not None and a0.buttons() == Qt.MouseButton.LeftButton:
+            self.move(a0.globalPosition().toPoint() - self._drag_pos)
 
-    def mouseReleaseEvent(self, _):
+    def mouseReleaseEvent(self, a0: Optional[QMouseEvent]):
         self._drag_pos = None
 
     # ── Task management ───────────────────────────────────────────────────────
@@ -948,13 +958,14 @@ class AriaSchedulerView(QWidget):
         y       = self._canvas._y_for_minutes(now.hour() * 60 + now.minute())
         bar     = self._scroll.verticalScrollBar()
         target  = max(0, y - self._scroll.height() // 3)
-        bar.setValue(target)
+        if bar is not None:
+            bar.setValue(target)
 
     # ── Dialog helpers ────────────────────────────────────────────────────────
 
     def _open_add_dialog(self, prefill_time: Optional[QTime] = None):
         dlg = TaskDialog(parent=self)
-        if prefill_time:
+        if prefill_time is not None:
             dlg._start.setTime(prefill_time)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data = dlg.get_task_data()

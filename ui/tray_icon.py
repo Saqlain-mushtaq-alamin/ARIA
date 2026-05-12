@@ -187,7 +187,7 @@ class TrayStatusHeader(QWidget):
             "font-family: Consolas, monospace; background: transparent;"
         )
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setBrush(QBrush(QColor(13, 17, 32)))
@@ -366,8 +366,8 @@ class AriaTrayIcon(QSystemTrayIcon):
 
     # ── Private slots ─────────────────────────────────────────────────────────
 
-    def _on_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+    def _on_activated(self, a0):
+        if a0 == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.open_chat.emit()
 
     def _on_voice_toggle(self, checked: bool):

@@ -11,8 +11,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve,
-    pyqtSignal, QPoint, QRect, QSize, QThread, pyqtProperty
+    pyqtSignal, QPoint, QRect, QSize, QThread
 )
+from PyQt6.QtCore import pyqtProperty  # type: ignore[attr-defined]
 from PyQt6.QtGui import (
     QColor, QPainter, QPen, QBrush, QLinearGradient,
     QFont, QFontDatabase, QPainterPath, QRegion, QCursor
@@ -93,7 +94,7 @@ class PulsingDot(QWidget):
         self._color = color
         self.update()
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         glow = QColor(self._color)
@@ -122,7 +123,7 @@ class GlowLabel(QLabel):
 class ScanlineOverlay(QWidget):
     """Subtle scanline texture painted on top of everything."""
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         pen = QPen(QColor(0, 229, 255, 6))
@@ -143,7 +144,7 @@ class CornerAccent(QWidget):
         self.sz     = size
         self.setFixedSize(size, size)
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(CLR_ACCENT, 1.5)
@@ -210,8 +211,10 @@ class AriaOverlay(QWidget):
         self.setMinimumWidth(280)
         self.resize(310, 170)
         # Position: top-right of primary screen
-        screen = QApplication.primaryScreen().geometry()
-        self.move(screen.width() - 330, 20)
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.geometry()
+            self.move(geo.width() - 330, 20)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -345,7 +348,7 @@ class AriaOverlay(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -376,8 +379,8 @@ class AriaOverlay(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(20, 0, self.width() - 40, 2, 1, 1)
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
+    def resizeEvent(self, a0):
+        super().resizeEvent(a0)
         w, h = self.width(), self.height()
         corners = self._corners
         corners[0].move(4, 4)
@@ -406,15 +409,19 @@ class AriaOverlay(QWidget):
 
     # ── Dragging ──────────────────────────────────────────────────────────────
 
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def mousePressEvent(self, a0):
+        if a0 is None:
+            return
+        if a0.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = a0.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
-    def mouseMoveEvent(self, e):
-        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
+    def mouseMoveEvent(self, a0):
+        if a0 is None:
+            return
+        if self._drag_pos is not None and a0.buttons() == Qt.MouseButton.LeftButton:
+            self.move(a0.globalPosition().toPoint() - self._drag_pos)
 
-    def mouseReleaseEvent(self, _):
+    def mouseReleaseEvent(self, a0):
         self._drag_pos = None
 
     # ── Public API ────────────────────────────────────────────────────────────

@@ -537,6 +537,8 @@ def log_interaction(
     if first_in_session:
         _auto_name_session(sid, str(user_text), db_path)
 
+    if user_id is None or asst_id is None:
+        raise RuntimeError("Failed to log interaction (missing row id)")
     return int(user_id), int(asst_id)
 
 
@@ -580,6 +582,8 @@ def log_message(
             (now, sid),
         )
 
+    if row_id is None:
+        raise RuntimeError("Failed to log message (missing row id)")
     return int(row_id)
 
 

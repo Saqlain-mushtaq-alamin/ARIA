@@ -36,7 +36,11 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
+
+
+MetadataValue = str | int | float | bool
+MetadataDict = Dict[str, MetadataValue]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,11 +159,11 @@ def _get_collection():
     return _COLLECTION
 
 
-def _embed(texts: List[str]) -> List[List[float]]:
+def _embed(texts: List[str]) -> List[Sequence[float]]:
     """Embed a list of texts and return list of float vectors."""
     model = _get_model()
     embeddings = model.encode(texts, show_progress_bar=False)
-    return [e.tolist() for e in embeddings]
+    return [cast(Sequence[float], e.tolist()) for e in embeddings]
 
 
 def _now_iso() -> str:
@@ -170,11 +174,11 @@ def _now_iso() -> str:
 # Metadata normalisation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _normalize_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _normalize_metadata(metadata: Optional[Dict[str, Any]]) -> MetadataDict:
     """ChromaDB requires all metadata values to be str/int/float/bool — no None."""
     meta: Dict[str, Any] = dict(metadata or {})
     meta.setdefault("timestamp", _now_iso())
-    normalized: Dict[str, Any] = {}
+    normalized: MetadataDict = {}
     for k, v in meta.items():
         if v is None:
             continue
@@ -183,6 +187,14 @@ def _normalize_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         else:
             normalized[str(k)] = str(v)
     return normalized
+
+
+def _to_scalar_str(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,8 +259,8 @@ def store_memories_batch(
     collection.add(
         ids=ids,
         documents=texts,
-        metadatas=metas,
-        embeddings=embeddings,
+        metadatas=cast(Any, metas),
+        embeddings=cast(Any, embeddings),
     )
     return ids
 
@@ -626,9 +638,9 @@ def get_memory_summary() -> str:
         )
         metas = sample.get("metadatas") or []
 
-        timestamps = [m.get("timestamp", "") for m in metas if m.get("timestamp")]
-        sessions = list({m.get("session_id", "") for m in metas if m.get("session_id")})
-        topics = list({m.get("topic", "") for m in metas if m.get("topic")})
+        timestamps = [t for t in (_to_scalar_str(m.get("timestamp")) for m in metas) if t]
+        sessions = list({s for s in (_to_scalar_str(m.get("session_id")) for m in metas) if s})
+        topics = list({t for t in (_to_scalar_str(m.get("topic")) for m in metas) if t})
 
         oldest = min(timestamps)[:10] if timestamps else "?"
         newest = max(timestamps)[:10] if timestamps else "?"

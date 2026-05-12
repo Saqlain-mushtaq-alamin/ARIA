@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect,
-    pyqtSignal, QSize, QPoint, pyqtProperty
+    pyqtSignal, QSize, QPoint
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QPen, QBrush, QLinearGradient, QRadialGradient,
@@ -130,7 +130,7 @@ class MessageBubble(QFrame):
     def _role_color(self):
         return {"user": T['accent'], "aria": T['accent2'], "system": T['text_muted']}.get(self.role, T['text_muted'])
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -205,7 +205,7 @@ class TaskChip(QFrame):
         lay.addWidget(self._text_label, 1)
         lay.addWidget(self._check)
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setBrush(QBrush(QColor(13, 17, 32, 120)))
@@ -295,11 +295,13 @@ class AriaChatWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(640, 560)
-        screen = QApplication.primaryScreen().geometry()
-        self.move(
-            screen.width() // 2 - 320,
-            screen.height() // 2 - 280
-        )
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.geometry()
+            self.move(
+                geo.width() // 2 - 320,
+                geo.height() // 2 - 280
+            )
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -477,7 +479,7 @@ class AriaChatWindow(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -508,15 +510,19 @@ class AriaChatWindow(QWidget):
 
     # ── Dragging ──────────────────────────────────────────────────────────────
 
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 44:
-            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def mousePressEvent(self, a0):
+        if a0 is None:
+            return
+        if a0.button() == Qt.MouseButton.LeftButton and a0.position().y() < 44:
+            self._drag_pos = a0.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
-    def mouseMoveEvent(self, e):
-        if self._drag_pos and e.buttons() == Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
+    def mouseMoveEvent(self, a0):
+        if a0 is None:
+            return
+        if self._drag_pos is not None and a0.buttons() == Qt.MouseButton.LeftButton:
+            self.move(a0.globalPosition().toPoint() - self._drag_pos)
 
-    def mouseReleaseEvent(self, _):
+    def mouseReleaseEvent(self, a0):
         self._drag_pos = None
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -561,9 +567,12 @@ class AriaChatWindow(QWidget):
         idx = self._messages_layout.count() - 1
         self._messages_layout.insertWidget(idx, row)
         # Auto-scroll to bottom
-        QTimer.singleShot(50, lambda: self._messages_scroll.verticalScrollBar().setValue(
-            self._messages_scroll.verticalScrollBar().maximum()
-        ))
+        def _scroll_to_bottom():
+            bar = self._messages_scroll.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.maximum())
+
+        QTimer.singleShot(50, _scroll_to_bottom)
 
     def show_typing(self, duration_ms: int = 3000):
         """Show 'ARIA is thinking…' indicator.
@@ -614,8 +623,11 @@ class AriaChatWindow(QWidget):
     def clear_suggestions(self):
         while self._suggestions_layout.count():
             item = self._suggestions_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
     # ── Private slots ─────────────────────────────────────────────────────────
 
