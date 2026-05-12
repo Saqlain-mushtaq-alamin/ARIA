@@ -23,6 +23,8 @@ from typing import Any, Callable, Dict, List
 
 from modules import browser_agent, system_control
 from scheduler.tracker import create_schedule_from_text, edit_schedule, show_schedule, whats_next
+from safety.harm_classifier import assess_risk, DANGEROUS, BLOCKED
+from safety.recycle_buffer import safe_delete
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,13 +203,7 @@ def _create_file(path: str, content: str = "", **_: Any) -> str:
 
 def _delete_file(path: str, **_: Any) -> str:
     real = _resolve_path(path)
-    if not os.path.exists(real):
-        return f"Not found: {real}"
-    if os.path.isdir(real):
-        shutil.rmtree(real)
-        return f"Directory deleted: {real}"
-    os.remove(real)
-    return f"File deleted: {real}"
+    return safe_delete(real)
 
 
 def _list_directory(path: str = ".", **_: Any) -> str:
@@ -540,6 +536,17 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
     """Dispatch a single intent payload to the appropriate handler function."""
     if not isinstance(payload, dict):
         raise ValueError("Payload must be a dict")
+
+    # ── Safety enforcement (hard gate) ────────────────────────────────────
+    # NOTE: The agent/UI may also do safety checks, but the router is the
+    # final choke-point to prevent bypass.
+    assessment = assess_risk(payload)
+    if assessment.level == BLOCKED:
+        raise PermissionError(f"Blocked by safety policy: {assessment.reason}")
+    if assessment.level == DANGEROUS and not bool(payload.get("confirmed", False)):
+        raise PermissionError(
+            f"Dangerous action requires explicit confirmation: {assessment.intent}"
+        )
 
     intent = payload.get("intent")
     if not intent:

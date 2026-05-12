@@ -194,6 +194,7 @@ _INTENT_RISK_TABLE: Dict[str, Tuple[str, str]] = {
     "set_volume":       (SAFE,      "Adjusting volume is safe."),
     "set_brightness":   (SAFE,      "Adjusting brightness is safe."),
     "take_screenshot":  (SAFE,      "Taking a screenshot is safe."),
+    "screenshot":       (SAFE,      "Taking a screenshot is safe."),
     "open_url":         (SAFE,      "Opening a URL is safe (URL will be scanned)."),
     "search_web":       (SAFE,      "Web search is safe."),
     "get_weather":      (SAFE,      "Fetching weather is safe."),

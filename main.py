@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core.agent import process_text
+from core.agent import process_text, _cli_ask
 from memory.conversation_log import log_interaction
 from voice.stt import listen_and_transcribe
 from voice.tts import speak
@@ -238,7 +238,7 @@ def _text_input_loop() -> None:
         text = line.strip()
         if not text:
             continue
-        response = _try_activate_kinetic_mode(text) or process_text(text)
+        response = _try_activate_kinetic_mode(text) or process_text(text, ask_fn=_cli_ask)
         print(response)
         try:
             log_interaction(text, response, metadata={"source": "text"})

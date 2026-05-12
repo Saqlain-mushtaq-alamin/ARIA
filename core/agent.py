@@ -59,7 +59,22 @@ from core.question_generator import (
 from modules import browser_agent, system_control
 from modules.content_generator import generate_text
 from safety.confirmation_engine import confirm_action
-from safety.harm_classifier import blocked_response, is_blocked
+from safety.harm_classifier import (
+    blocked_response,
+    is_blocked,
+    assess_risk,
+    SAFE,
+    CONFIRM,
+    DANGEROUS,
+    BLOCKED,
+)
+from safety.audit_log import (
+    log_action,
+    OUTCOME_SUCCESS,
+    OUTCOME_BLOCKED,
+    OUTCOME_CANCELLED,
+    OUTCOME_ERROR,
+)
 from scheduler.tracker import has_plan
 from .intent_classifier import classify_intent, is_conversational
 
@@ -409,8 +424,99 @@ def _parse_browser_command(user_text: str) -> dict | None:
     return None
 
 
+def _parse_app_control_command(user_text: str) -> dict | None:
+    """Fast-path parsing for common app close commands.
+
+    This avoids LLM misclassification for things like "close chrome".
+    Only triggers when the target looks like a known app alias.
+    """
+    text = (user_text or "").strip()
+    if not text:
+        return None
+
+    match = re.match(r"^(close|quit|exit)\s+(?:the\s+)?(.+)$", text, re.IGNORECASE)
+    if not match:
+        return None
+
+    target = match.group(2).strip().rstrip(" .,!?:;")
+    t = target.lower()
+
+    known = set(system_control.APP_ALIASES.keys()) | set(system_control.APP_ALIASES.values())
+    if t not in known:
+        return None
+
+    return {"intent": "close_window", "parameters": {"app_name": target}}
+
+
+def _strip_confirm_prefix(user_text: str) -> tuple[str, bool]:
+    """Return (cleaned_text, force_confirmed) for inputs like 'confirm shutdown'."""
+    text = (user_text or "").strip()
+    match = re.match(r"^(?:please\s+)?confirm\s*[:\-]?\s+(.+)$", text, re.IGNORECASE)
+    if match:
+        rest = match.group(1).strip()
+        return rest, True
+    match = re.match(r"^yes\s+confirm\s*[:\-]?\s+(.+)$", text, re.IGNORECASE)
+    if match:
+        rest = match.group(1).strip()
+        return rest, True
+    return user_text, False
+
+
+def _needs_dangerous_confirmation(payload: dict, force_confirmed: bool) -> bool:
+    try:
+        assessment = assess_risk(payload)
+    except Exception:
+        return False
+    if assessment.level != DANGEROUS:
+        return False
+    if force_confirmed:
+        return False
+    return not bool(payload.get("confirmed", False))
+
+
+def _confirmation_instructions(payload: dict) -> str:
+    """Human instruction for confirming a dangerous action in non-interactive mode."""
+    intent = str(payload.get("intent") or "").strip() or "this action"
+    assessment = assess_risk(payload)
+    return (
+        "🔴 High-risk action needs confirmation.\n"
+        f"Action: {intent.replace('_', ' ')}\n"
+        f"Risk: {assessment.reason}\n\n"
+        "To proceed, type a new message starting with: confirm ...\n"
+        f"Example: confirm {intent.replace('_', ' ')}"
+    )
+
+
 def _parse_system_command(user_text: str) -> dict | None:
     lowered = (user_text or "").strip().lower()
+    # Explicit power commands (keep strict to avoid misreading "turn off Wi-Fi")
+    if lowered in {
+        "shutdown",
+        "shut down",
+        "power off",
+        "turn off pc",
+        "turn off my pc",
+        "turn off the pc",
+        "turn off computer",
+        "turn off my computer",
+        "turn off the computer",
+    }:
+        return {"intent": "shutdown", "parameters": {}}
+
+    if lowered in {
+        "restart",
+        "reboot",
+        "restart pc",
+        "restart my pc",
+        "restart the pc",
+        "restart computer",
+        "restart my computer",
+        "restart the computer",
+        "reboot pc",
+        "reboot computer",
+    }:
+        return {"intent": "restart", "parameters": {}}
+
     m = re.match(r"^(set|change)\s+volume\s*(?:to|at)?\s*(\d{1,3})\b", lowered)
     if m:
         return {"intent": "set_volume", "parameters": {"level": max(0, min(100, int(m.group(2))))}}
@@ -501,6 +607,10 @@ def process_text_stream(
         yield "No input received."
         return
 
+    # ── Optional: inline confirmation prefix (non-interactive UI/voice) ────
+    # Supports: "confirm shutdown", "confirm delete file ..." etc.
+    user_text, force_confirmed = _strip_confirm_prefix(user_text)
+
     # ── Track 1: Conversational ─────────────────────────────────────────────
     # Fast heuristic check first (no LLM call needed for obvious greetings)
     try:
@@ -517,7 +627,7 @@ def process_text_stream(
     payload: dict[str, Any] = {}
 
     # Fast parsers first (no Ollama call, instant)
-    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command):
+    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command, _parse_app_control_command):
         result = parser(user_text)
         if isinstance(result, dict):
             payload = result
@@ -546,8 +656,20 @@ def process_text_stream(
 
         payload = classified
 
-    # ── Safety gate ─────────────────────────────────────────────────────────
+    # ── Safety gate (BLOCKED) ───────────────────────────────────────────────
     if is_blocked(payload):
+        try:
+            assessment = assess_risk(payload)
+            log_action(
+                intent=str(payload.get("intent", "unknown")),
+                parameters=payload.get("parameters") or {},
+                risk_level=assessment.level,
+                outcome=OUTCOME_BLOCKED,
+                result_summary=assessment.reason,
+                user_input=user_text,
+            )
+        except Exception:
+            pass
         yield blocked_response(payload)
         return
 
@@ -609,16 +731,78 @@ def process_text_stream(
 
             # Safety check per step
             if is_blocked(step):
+                try:
+                    assessment = assess_risk(step)
+                    log_action(
+                        intent=step_intent,
+                        parameters=step_params,
+                        risk_level=assessment.level,
+                        outcome=OUTCOME_BLOCKED,
+                        result_summary=assessment.reason,
+                        user_input=user_text,
+                        extra={"step": i, "total_steps": total},
+                    )
+                except Exception:
+                    pass
                 yield _step_error(i, total, label, "This action is blocked for safety.")
                 results_all.append(f"Step {i}: blocked")
                 continue
 
+            # Dangerous actions need explicit confirmation.
+            if _needs_dangerous_confirmation(step, force_confirmed=force_confirmed):
+                msg = _confirmation_instructions(step)
+                try:
+                    assessment = assess_risk(step)
+                    log_action(
+                        intent=step_intent,
+                        parameters=step_params,
+                        risk_level=assessment.level,
+                        outcome=OUTCOME_CANCELLED,
+                        result_summary="Confirmation required (non-interactive mode).",
+                        user_input=user_text,
+                        extra={"step": i, "total_steps": total},
+                    )
+                except Exception:
+                    pass
+                yield _step_error(i, total, label, "Confirmation required.")
+                yield msg
+                return
+
+            if force_confirmed and assess_risk(step).level == DANGEROUS:
+                step = {**step, "confirmed": True}
+
             try:
                 outcome = dispatch_intent(step)
                 result_str = str(outcome).strip() if outcome is not None else "Done."
+                try:
+                    assessment = assess_risk(step)
+                    log_action(
+                        intent=step_intent,
+                        parameters=step_params,
+                        risk_level=assessment.level,
+                        outcome=OUTCOME_SUCCESS,
+                        result_summary=result_str,
+                        user_input=user_text,
+                        extra={"step": i, "total_steps": total},
+                    )
+                except Exception:
+                    pass
                 yield _step_success(i, total, label, result_str)
                 results_all.append(f"Step {i}: {result_str[:60]}")
             except Exception as exc:
+                try:
+                    assessment = assess_risk(step)
+                    log_action(
+                        intent=step_intent,
+                        parameters=step_params,
+                        risk_level=assessment.level,
+                        outcome=OUTCOME_ERROR,
+                        result_summary=str(exc),
+                        user_input=user_text,
+                        extra={"step": i, "total_steps": total},
+                    )
+                except Exception:
+                    pass
                 yield _step_error(i, total, label, str(exc))
                 results_all.append(f"Step {i}: error — {exc}")
 
@@ -653,8 +837,59 @@ def process_text_stream(
 
     # Re-check safety after question gate may have updated payload
     if is_blocked(payload):
+        try:
+            assessment = assess_risk(payload)
+            log_action(
+                intent=intent,
+                parameters=parameters,
+                risk_level=assessment.level,
+                outcome=OUTCOME_BLOCKED,
+                result_summary=assessment.reason,
+                user_input=user_text,
+            )
+        except Exception:
+            pass
         yield blocked_response(payload)
         return
+
+    # Dangerous actions must be explicitly confirmed.
+    if _needs_dangerous_confirmation(payload, force_confirmed=force_confirmed):
+        msg = _confirmation_instructions(payload)
+        try:
+            assessment = assess_risk(payload)
+            log_action(
+                intent=intent,
+                parameters=parameters,
+                risk_level=assessment.level,
+                outcome=OUTCOME_CANCELLED,
+                result_summary="Confirmation required (non-interactive mode).",
+                user_input=user_text,
+            )
+        except Exception:
+            pass
+        yield msg
+        return
+
+    if callable(ask_fn) and assess_risk(payload).level == DANGEROUS and not force_confirmed:
+        ok = confirm_action(payload, ask_fn=ask_fn)
+        if not ok:
+            try:
+                assessment = assess_risk(payload)
+                log_action(
+                    intent=intent,
+                    parameters=parameters,
+                    risk_level=assessment.level,
+                    outcome=OUTCOME_CANCELLED,
+                    result_summary="User cancelled confirmation.",
+                    user_input=user_text,
+                )
+            except Exception:
+                pass
+            yield "Action cancelled."
+            return
+
+    if (force_confirmed or bool(payload.get("confirmed"))) and assess_risk(payload).level == DANGEROUS:
+        payload = {**payload, "confirmed": True}
 
     # Content generation for single-step if needed
     step = _generate_step_content({"intent": intent, "parameters": parameters})
@@ -669,8 +904,32 @@ def process_text_stream(
                                   **{k: v for k, v in payload.items()
                                      if k not in {"intent", "parameters"}}})
         result_str = result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False)
+        try:
+            assessment = assess_risk(payload)
+            log_action(
+                intent=intent,
+                parameters=parameters,
+                risk_level=assessment.level,
+                outcome=OUTCOME_SUCCESS,
+                result_summary=str(result_str),
+                user_input=user_text,
+            )
+        except Exception:
+            pass
         yield _step_success(1, 1, label, result_str)
     except Exception as exc:
+        try:
+            assessment = assess_risk(payload)
+            log_action(
+                intent=intent,
+                parameters=parameters,
+                risk_level=assessment.level,
+                outcome=OUTCOME_ERROR,
+                result_summary=str(exc),
+                user_input=user_text,
+            )
+        except Exception:
+            pass
         yield _step_error(1, 1, label, str(exc))
 
 
