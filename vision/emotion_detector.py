@@ -48,6 +48,10 @@ class EmotionDetectorConfig:
     # This avoids "detecting" mood when the webcam is off or permissions block it.
     min_frame_stddev: float = 5.0
 
+    # Camera capture reliability (helps with virtual cams like Camo Studio)
+    warmup_frames: int = 3
+    capture_attempts: int = 6
+
     # Observability
     log_samples: bool = True
     log_failures: bool = True
@@ -100,30 +104,45 @@ def _capture_frame(camera_index: int) -> Optional["Any"]:
     except Exception:
         return None
 
-    cap = None
-    try:
-        # CAP_DSHOW reduces startup delay on many Windows machines.
-        cap = cv2.VideoCapture(int(camera_index), cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            return None
+    # Try common Windows backends. Some virtual webcams behave better on MSMF.
+    backends = [
+        getattr(cv2, "CAP_DSHOW", 700),
+        getattr(cv2, "CAP_MSMF", 1400),
+        0,
+    ]
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        # Warm a couple frames to let auto-exposure settle.
-        for _ in range(2):
-            cap.read()
-
-        ok, frame = cap.read()
-        if not ok:
-            return None
-        return frame
-    finally:
+    for backend in backends:
+        cap = None
         try:
-            if cap is not None:
-                cap.release()
+            cap = cv2.VideoCapture(int(camera_index), int(backend))
+            if not cap.isOpened():
+                continue
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+            # Warm up a few frames to let virtual cams / exposure settle.
+            for _ in range(3):
+                cap.read()
+
+            # Read a handful of frames and return the last successful one.
+            last_ok = None
+            for _ in range(6):
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    last_ok = frame
+            if last_ok is not None:
+                return last_ok
         except Exception:
-            pass
+            continue
+        finally:
+            try:
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                pass
+
+    return None
 
 
 def _maybe_save_frame(frame_bgr: "Any", path: str) -> None:
@@ -131,6 +150,25 @@ def _maybe_save_frame(frame_bgr: "Any", path: str) -> None:
         import cv2  # type: ignore
     except Exception:
         return
+
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        cv2.imwrite(path, frame_bgr)
+    except Exception:
+        return
+
+
+def _frame_stddev(frame_bgr: "Any") -> float | None:
+    try:
+        import cv2  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        _mean, std = cv2.meanStdDev(frame_bgr)
+        return float(std.max()) if hasattr(std, "max") else float(std)
+    except Exception:
+        return None
 
 
 def _frame_has_signal(frame_bgr: "Any", *, min_stddev: float) -> bool:
@@ -150,11 +188,10 @@ def _frame_has_signal(frame_bgr: "Any", *, min_stddev: float) -> bool:
         return True  # can't evaluate; don't block
 
     try:
-        # cv2.meanStdDev expects a valid image array.
-        _mean, std = cv2.meanStdDev(frame_bgr)
-        # std is per-channel; take max to be permissive.
-        std_max = float(std.max()) if hasattr(std, "max") else float(std)
-        return std_max >= float(min_stddev)
+        std_val = _frame_stddev(frame_bgr)
+        if std_val is None:
+            return True
+        return float(std_val) >= float(min_stddev)
     except Exception:
         return True
 
@@ -361,7 +398,12 @@ class EmotionDetector:
 
         if not _frame_has_signal(frame, min_stddev=float(self.config.min_frame_stddev)):
             if self.config.log_failures:
-                print("[EmotionDetector] Webcam frame looks blank/blocked; skipping.")
+                std_val = _frame_stddev(frame)
+                std_txt = f"stddev={std_val:.2f}" if isinstance(std_val, float) else "stddev=?"
+                print(
+                    "[EmotionDetector] Webcam frame looks blank/blocked; skipping. "
+                    f"(camera_index={self.config.camera_index}, {std_txt}, min_stddev={float(self.config.min_frame_stddev):.2f})"
+                )
             return None, None
 
         if self.config.save_last_frame:

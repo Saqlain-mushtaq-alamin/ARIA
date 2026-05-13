@@ -593,6 +593,11 @@ def stop_screen_reader() -> None:
     _STOP_EVENT.set()
 
 
+def is_screen_reader_running() -> bool:
+    """Return True if the screen reader thread is alive."""
+    return _READER_THREAD is not None and _READER_THREAD.is_alive()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ════════════════════════════════════════════════════════════════════════════
 #  AGENT.PY WIRING — copy-paste guide
