@@ -379,6 +379,7 @@ _REQUIRED_FIELDS: Dict[str, List[str]] = {
     "set_brightness":   ["level"],
     "type_text":        ["text"],
     "open_file":        ["path"],
+    "open_folder":      ["path"],
     "save_file":        ["path", "content"],
     "create_file":      ["path"],
     "delete_file":      ["path"],

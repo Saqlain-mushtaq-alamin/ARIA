@@ -17,12 +17,15 @@ import ctypes
 import os
 import shutil
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from modules import browser_agent, system_control
 from scheduler.tracker import create_schedule_from_text, edit_schedule, show_schedule, whats_next
+
+_GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +176,44 @@ def _set_brightness(level: int | str = 50, **_: Any) -> str:
         return f"Brightness set to {level}%."
     except Exception as exc:
         return f"Failed to set brightness: {exc}"
+
+
+def _open_folder(path: str, **_: Any) -> str:
+    return system_control.open_folder(path)
+
+
+def _activate_kinetic_mode(**_: Any) -> str:
+    """Start gesture controller from core routing layer (works in UI and headless)."""
+    global _GESTURE_CONTROLLER_PROC
+    if _GESTURE_CONTROLLER_PROC is not None and _GESTURE_CONTROLLER_PROC.poll() is None:
+        return "Kinetic mode is already running. Focus the webcam window and press Q to quit."
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "vision" / "gesture_contoll" / "gesture_controller.py"
+    if not script_path.exists():
+        return "Gesture controller not found at vision/gesture_contoll/gesture_controller.py."
+
+    try:
+        _GESTURE_CONTROLLER_PROC = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(repo_root),
+        )
+        return "Kinetic mode activated. A webcam window should open now. Press Q in that window to stop."
+    except Exception as exc:
+        return f"Failed to activate kinetic mode: {exc}"
+
+
+def _deactivate_kinetic_mode(**_: Any) -> str:
+    global _GESTURE_CONTROLLER_PROC
+    proc = _GESTURE_CONTROLLER_PROC
+    _GESTURE_CONTROLLER_PROC = None
+    if proc is None or proc.poll() is not None:
+        return "Kinetic mode is not running."
+    try:
+        proc.terminate()
+        return "Kinetic mode deactivated."
+    except Exception as exc:
+        return f"Failed to deactivate kinetic mode: {exc}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,11 +453,14 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "restart":          _restart,
     "lock_screen":      _lock_screen,
     "sleep":            _sleep,
-    "toggle_wifi":      _toggle_wifi,
-    "toggle_bluetooth": _toggle_bluetooth,
+    "toggle_wifi":      system_control.toggle_wifi,
+    "toggle_bluetooth": system_control.toggle_bluetooth,
     "toggle_airplane":  _toggle_airplane,
     "screenshot":       _screenshot,
-    "set_brightness":   _set_brightness,
+    "set_brightness":   system_control.set_brightness,
+    "open_folder":      _open_folder,
+    "activate_kinetic_mode": _activate_kinetic_mode,
+    "deactivate_kinetic_mode": _deactivate_kinetic_mode,
 
     # File operations
     "open_file":        _open_file,
@@ -481,6 +525,15 @@ INTENT_ALIASES: Dict[str, str] = {
     "bluetooth":        "toggle_bluetooth",
     "airplane_mode":    "toggle_airplane",
     "flight_mode":      "toggle_airplane",
+    "open_folder":      "open_folder",
+    "folder_open":      "open_folder",
+    "open_directory":   "open_folder",
+    "activate_kinetic_mode": "activate_kinetic_mode",
+    "start_kinetic_mode": "activate_kinetic_mode",
+    "kinetic_mode_on":  "activate_kinetic_mode",
+    "deactivate_kinetic_mode": "deactivate_kinetic_mode",
+    "stop_kinetic_mode": "deactivate_kinetic_mode",
+    "kinetic_mode_off": "deactivate_kinetic_mode",
     # Files
     "open_file":        "open_file",
     "file_open":        "open_file",
@@ -638,6 +691,12 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
         path = parameters.get("path") or parameters.get("file") or ""
         if not path:
             raise ValueError("File path is required")
+        return handler(path=str(path))
+
+    if intent == "open_folder":
+        path = parameters.get("path") or parameters.get("directory") or ""
+        if not path:
+            raise ValueError("Folder path is required")
         return handler(path=str(path))
 
     if intent in {"save_file", "create_file"}:
