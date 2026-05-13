@@ -97,7 +97,12 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
-def _capture_frame(camera_index: int) -> Optional["Any"]:
+def _capture_frame(
+    camera_index: int,
+    *,
+    warmup_frames: int = 3,
+    capture_attempts: int = 6,
+) -> Optional["Any"]:
     # Returns a single BGR frame (numpy array) or None.
     try:
         import cv2  # type: ignore
@@ -111,6 +116,9 @@ def _capture_frame(camera_index: int) -> Optional["Any"]:
         0,
     ]
 
+    warmup = max(0, int(warmup_frames))
+    attempts = max(1, int(capture_attempts))
+
     for backend in backends:
         cap = None
         try:
@@ -122,12 +130,12 @@ def _capture_frame(camera_index: int) -> Optional["Any"]:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
             # Warm up a few frames to let virtual cams / exposure settle.
-            for _ in range(3):
+            for _ in range(warmup):
                 cap.read()
 
             # Read a handful of frames and return the last successful one.
             last_ok = None
-            for _ in range(6):
+            for _ in range(attempts):
                 ok, frame = cap.read()
                 if ok and frame is not None:
                     last_ok = frame
@@ -390,7 +398,11 @@ class EmotionDetector:
         return payload
 
     def run_once(self) -> Tuple[Optional[EmotionSample], Optional[Dict[str, Any]]]:
-        frame = _capture_frame(self.config.camera_index)
+        frame = _capture_frame(
+            self.config.camera_index,
+            warmup_frames=self.config.warmup_frames,
+            capture_attempts=self.config.capture_attempts,
+        )
         if frame is None:
             if self.config.log_failures:
                 print("[EmotionDetector] No webcam frame captured; skipping.")

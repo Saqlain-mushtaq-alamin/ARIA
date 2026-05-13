@@ -465,6 +465,7 @@ def _reader_loop(
     model: str,
     stuck_minutes: int,
     debug: bool,
+    log_summaries: bool,
 ) -> None:
     """Main loop: sleep → wait for LLM idle → capture → analyse → store."""
     print(
@@ -492,6 +493,15 @@ def _reader_loop(
         summary = _analyse_screen(ollama_url, model, debug)
         if summary is None:
             continue
+
+        if log_summaries:
+            try:
+                print(
+                    "[screen_reader] summary: "
+                    f"activity='{summary.activity}' app='{summary.app_hint}' mood='{summary.emotional_hint}'"
+                )
+            except Exception:
+                pass
 
         # ── Store ─────────────────────────────────────────────────────────────
         with _STATE.lock:
@@ -571,6 +581,7 @@ def start_screen_reader(
     history       = _env_int ("SCREEN_READER_HISTORY",        5)
     stuck_minutes = _env_int ("SCREEN_READER_STUCK_MINUTES",  20)
     debug         = _env_bool("SCREEN_READER_DEBUG",          False)
+    log_summaries = _env_bool("SCREEN_READER_LOG_SUMMARIES",  True)
 
     _update_maxlen(history)
 
@@ -580,7 +591,7 @@ def start_screen_reader(
 
     _READER_THREAD = threading.Thread(
         target=_reader_loop,
-        args=(interval, ollama_url, model, stuck_minutes, debug),
+        args=(interval, ollama_url, model, stuck_minutes, debug, log_summaries),
         daemon=True,
         name="screen-reader",
     )
