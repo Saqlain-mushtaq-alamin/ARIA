@@ -71,6 +71,7 @@ AVAILABLE INTENTS AND THEIR REQUIRED PARAMETERS:
 
 System control:
   open_app          → parameters.app_name (string)
+  open_folder       → parameters.path (string)
   close_window      → parameters.app_name (string)
   set_volume        → parameters.level (int 0-100)
   get_clipboard     → no parameters
@@ -84,6 +85,8 @@ System control:
   toggle_airplane   → parameters.state ("on" or "off")
   screenshot        → parameters.path (optional save path string)
   set_brightness    → parameters.level (int 0-100)
+  activate_kinetic_mode   → no parameters
+  deactivate_kinetic_mode → no parameters
 
 File operations:
   open_file         → parameters.path (string)
@@ -123,6 +126,8 @@ Notes for multi-step commands:
 - For type_text steps that follow an open_app step, if the text needs to be
   generated (like "a story", "a poem", etc.), set parameters.generate=true and
   parameters.prompt to describe what to generate.
+- If user mentions typos like "nodepad", "fle explorere", or "activite kinetic",
+  normalize to the proper intent and parameters.
 
 Return ONLY the JSON. No markdown. No explanation.
 """
@@ -175,9 +180,28 @@ def _call_ollama(system: str, user: str, model: str) -> str:
     return response.get("message", {}).get("content", "").strip()
 
 
+def _normalize_user_text(user_text: str) -> str:
+    """Correct frequent speech-to-text and typing mistakes before classification."""
+    text = user_text or ""
+    replacements = [
+        (r"\bnodepad\b", "notepad"),
+        (r"\bfle\s+explorere\b", "file explorer"),
+        (r"\bfile\s+explorere\b", "file explorer"),
+        (r"\bcamo\s+studi[o0]\b", "camo studio"),
+        (r"\bactivite\b", "activate"),
+        (r"\bkinitic\b", "kinetic"),
+        (r"\bbluetooh\b", "bluetooth"),
+        (r"\bwi[\s-]?fi\b", "wifi"),
+    ]
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    return text
+
+
 def is_conversational(user_text: str, model: str = "llama3") -> bool:
     """Return True if the input is conversational (needs a text reply, not a tool call)."""
-    raw = _call_ollama(_STAGE1_SYSTEM, user_text, model)
+    normalized = _normalize_user_text(user_text)
+    raw = _call_ollama(_STAGE1_SYSTEM, normalized, model)
     obj = _extract_json(raw)
     if obj and isinstance(obj, dict):
         return str(obj.get("type", "")).lower() == "conversational"
@@ -203,14 +227,16 @@ def classify_intent(user_text: str, model: str = "llama3") -> Dict[str, Any]:
         return {"intent": "unknown", "parameters": {}}
 
     # ── Stage 1: conversational vs actionable ───────────────────────────────
-    if is_conversational(user_text, model):
+    normalized = _normalize_user_text(user_text)
+
+    if is_conversational(normalized, model):
         return {
             "intent": "conversational",
             "parameters": {"prompt": user_text},
         }
 
     # ── Stage 2: structured intent extraction ───────────────────────────────
-    raw = _call_ollama(_STAGE2_SYSTEM, user_text, model)
+    raw = _call_ollama(_STAGE2_SYSTEM, normalized, model)
     if not raw:
         raise ValueError("Empty response from model")
 

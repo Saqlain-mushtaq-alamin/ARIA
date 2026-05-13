@@ -190,6 +190,9 @@ _INJECTION_PATTERNS: List[re.Pattern] = [
 _INTENT_RISK_TABLE: Dict[str, Tuple[str, str]] = {
     # Safe
     "open_app":         (SAFE,      "Opening an application is safe."),
+    "open_folder":      (SAFE,      "Opening a folder is safe."),
+    "activate_kinetic_mode":   (SAFE, "Activating gesture control is safe."),
+    "deactivate_kinetic_mode": (SAFE, "Stopping gesture control is safe."),
     "get_clipboard":    (SAFE,      "Reading clipboard is safe."),
     "set_volume":       (SAFE,      "Adjusting volume is safe."),
     "set_brightness":   (SAFE,      "Adjusting brightness is safe."),

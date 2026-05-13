@@ -133,6 +133,7 @@ APP_ALIASES: Dict[str, str] = {
     "opera":             "opera.exe",
     # Editors / IDEs
     "notepad":           "notepad.exe",
+    "nodepad":           "notepad.exe",
     "notepad++":         "notepad++.exe",
     "vscode":            "code.exe",
     "vs code":           "code.exe",
@@ -155,6 +156,8 @@ APP_ALIASES: Dict[str, str] = {
     "taskmgr":           "taskmgr.exe",
     "control panel":     "control.exe",
     "file explorer":     "explorer.exe",
+    "file explorere":    "explorer.exe",
+    "fle explorere":     "explorer.exe",
     "explorer":          "explorer.exe",
     "command prompt":    "cmd.exe",
     "cmd":               "cmd.exe",
@@ -184,6 +187,10 @@ APP_ALIASES: Dict[str, str] = {
     "slack":             "slack.exe",
     "obs":               "obs64.exe",
     "obs studio":        "obs64.exe",
+    "camo":              "start:Camo Studio",
+    "camo studio":       "start:Camo Studio",
+    "camo app":          "start:Camo Studio",
+    "canva studio":      "start:Camo Studio",
     "tor":               "start:Tor Browser",
     "tor browser":       "start:Tor Browser",
     # Media Player

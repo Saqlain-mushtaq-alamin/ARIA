@@ -131,6 +131,7 @@ def get_tools() -> list[Tool]:
 
 _INTENT_LABELS: dict[str, str] = {
     "open_app":         "Opening {app_name}",
+    "open_folder":      "Opening folder: {path}",
     "close_window":     "Closing {app_name}",
     "set_volume":       "Setting volume to {level}%",
     "set_brightness":   "Setting brightness to {level}%",
@@ -167,6 +168,8 @@ _INTENT_LABELS: dict[str, str] = {
     "answer_question":  "Thinking...",
     "conversational":   "Thinking...",
     "type_generated_text": "Generating and typing text",
+    "activate_kinetic_mode": "Activating kinetic mode",
+    "deactivate_kinetic_mode": "Deactivating kinetic mode",
 }
 
 
@@ -375,6 +378,115 @@ def _question_gate(
 # Legacy command parsers (kept for speed — bypass LLM for obvious inputs)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_user_text(user_text: str) -> str:
+    """Correct common typos/STT mistakes for deterministic parsers."""
+    text = user_text or ""
+    replacements = [
+        (r"\bnodepad\b", "notepad"),
+        (r"\bfle\s+explorere\b", "file explorer"),
+        (r"\bfile\s+explorere\b", "file explorer"),
+        (r"\bcamo\s+studi[o0]\b", "camo studio"),
+        (r"\bactivite\b", "activate"),
+        (r"\bkinitic\b", "kinetic"),
+        (r"\bbluetooh\b", "bluetooth"),
+    ]
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    return text
+
+
+def _parse_open_target(target: str) -> dict | None:
+    cleaned = (target or "").strip().rstrip(" .,!?:;")
+    cleaned = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.IGNORECASE)
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+
+    m = re.search(
+        r"(?P<name>[\w\s._-]+?)\s+folder\s+(?:inside|in)\s+(?:the\s+)?(?P<drive>[a-z])\s*drive",
+        lowered,
+    )
+    if m:
+        folder = m.group("name").strip().replace("/", "\\")
+        folder = re.sub(r"\s+", " ", folder)
+        path = f"{m.group('drive').upper()}:\\{folder}"
+        return {"intent": "open_folder", "parameters": {"path": path}}
+
+    m = re.search(r"\b([a-z])\s*drive\b", lowered)
+    if m and "folder" in lowered:
+        return {"intent": "open_folder", "parameters": {"path": f"{m.group(1).upper()}:\\"}}
+
+    if re.match(r"^[a-zA-Z]:[\\/]", cleaned):
+        return {"intent": "open_folder", "parameters": {"path": cleaned}}
+
+    if "folder" in lowered and not lowered.endswith(".txt"):
+        folder_name = re.sub(r"\bfolder\b", "", cleaned, flags=re.IGNORECASE).strip()
+        if folder_name:
+            return {"intent": "open_folder", "parameters": {"path": folder_name}}
+
+    return {"intent": "open_app", "parameters": {"app_name": cleaned}}
+
+
+def _parse_multistep_command(user_text: str) -> dict | None:
+    text = (user_text or "").strip()
+    if not text:
+        return None
+
+    if not re.search(r"\b(and|then)\b|,", text, flags=re.IGNORECASE):
+        return None
+
+    chunks = [c.strip() for c in re.split(r"\s*(?:,|;|\band then\b|\bthen\b)\s*", text, flags=re.IGNORECASE) if c.strip()]
+    if len(chunks) < 2 and not re.search(r"\band\b", text, flags=re.IGNORECASE):
+        return None
+
+    steps: list[dict] = []
+    for chunk in chunks:
+        open_match = re.match(r"^open\s+(.+)$", chunk, re.IGNORECASE)
+        if open_match:
+            targets = [t.strip() for t in re.split(r"\s+\band\b\s+", open_match.group(1), flags=re.IGNORECASE) if t.strip()]
+            for target in targets:
+                write_in_open = re.match(r"^(?:write|type)\s+(.+)$", target, re.IGNORECASE)
+                if write_in_open:
+                    content = write_in_open.group(1).strip()
+                    if any(k in content.lower() for k in ("story", "poem", "email", "essay", "article")):
+                        steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
+                    else:
+                        steps.append({"intent": "type_text", "parameters": {"text": content}})
+                    continue
+                parsed = _parse_open_target(target)
+                if parsed:
+                    steps.append(parsed)
+            continue
+
+        write_match = re.match(r"^(?:write|type)\s+(.+)$", chunk, re.IGNORECASE)
+        if write_match:
+            content = write_match.group(1).strip()
+            if any(k in content.lower() for k in ("story", "poem", "email", "essay", "article")):
+                steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
+            else:
+                steps.append({"intent": "type_text", "parameters": {"text": content}})
+            continue
+
+        parsed = _parse_system_command(chunk) or _parse_browser_command(chunk) or _parse_scheduler_command(chunk)
+        if parsed:
+            steps.append(parsed)
+            continue
+
+        # If a bare app name appears after an open clause, treat it as another open step.
+        if len(chunk.split()) <= 4 and not re.search(r"\b(turn|set|search|click|extract|save|delete|copy|move)\b", chunk, re.IGNORECASE):
+            for part in re.split(r"\s+\band\b\s+", chunk, flags=re.IGNORECASE):
+                part = part.strip()
+                if not part:
+                    continue
+                parsed = _parse_open_target(part)
+                if parsed:
+                    steps.append(parsed)
+
+    if len(steps) >= 2:
+        return {"intent": "multi_step", "steps": steps}
+    return None
+
+
 def _parse_browser_command(user_text: str) -> dict | None:
     text = user_text.strip()
     if not text:
@@ -523,6 +635,39 @@ def _parse_system_command(user_text: str) -> dict | None:
     m = re.match(r"^(mute|unmute)\b", lowered)
     if m:
         return {"intent": "set_volume", "parameters": {"level": 0 if m.group(1) == "mute" else 30}}
+
+    m = re.search(r"\bturn\s+(on|off)\s+(?:the\s+)?wi[\s-]?fi\b", lowered)
+    if m:
+        return {"intent": "toggle_wifi", "parameters": {"state": m.group(1)}}
+    if re.search(r"\b(?:enable|disable)\s+(?:the\s+)?wi[\s-]?fi\b", lowered):
+        state = "on" if "enable" in lowered else "off"
+        return {"intent": "toggle_wifi", "parameters": {"state": state}}
+
+    m = re.search(r"\bturn\s+(on|off)\s+(?:the\s+)?bluetooth\b", lowered)
+    if m:
+        return {"intent": "toggle_bluetooth", "parameters": {"state": m.group(1)}}
+    if re.search(r"\b(?:enable|disable)\s+(?:the\s+)?bluetooth\b", lowered):
+        state = "on" if "enable" in lowered else "off"
+        return {"intent": "toggle_bluetooth", "parameters": {"state": state}}
+
+    m = re.search(r"\b(?:set|change|adjust)\s+brightness\s*(?:to|at)?\s*(\d{1,3})\b", lowered)
+    if m:
+        return {"intent": "set_brightness", "parameters": {"level": max(0, min(100, int(m.group(1))))}}
+
+    if ("kinetic" in lowered or "gesture control" in lowered) and any(k in lowered for k in ("activate", "enable", "start", "on")):
+        return {"intent": "activate_kinetic_mode", "parameters": {}}
+    if ("kinetic" in lowered or "gesture control" in lowered) and any(k in lowered for k in ("deactivate", "disable", "stop", "off")):
+        return {"intent": "deactivate_kinetic_mode", "parameters": {}}
+
+    open_folder_match = re.search(
+        r"\bopen\s+(.+?)\s+folder\s+(?:inside|in)\s+(?:the\s+)?([a-z])\s*drive\b",
+        lowered,
+    )
+    if open_folder_match:
+        folder = open_folder_match.group(1).strip()
+        drive = open_folder_match.group(2).upper()
+        return {"intent": "open_folder", "parameters": {"path": f"{drive}:\\{folder}"}}
+
     return None
 
 
@@ -606,6 +751,7 @@ def process_text_stream(
     if not user_text or not user_text.strip():
         yield "No input received."
         return
+    normalized_text = _normalize_user_text(user_text)
 
     # ── Optional: inline confirmation prefix (non-interactive UI/voice) ────
     # Supports: "confirm shutdown", "confirm delete file ..." etc.
@@ -614,7 +760,7 @@ def process_text_stream(
     # ── Track 1: Conversational ─────────────────────────────────────────────
     # Fast heuristic check first (no LLM call needed for obvious greetings)
     try:
-        if is_conversational(user_text):
+        if is_conversational(normalized_text):
             augmented = _build_context_prompt(user_text)
             with llm_busy_context():
                 reply = generate_text(augmented).strip()
@@ -627,7 +773,7 @@ def process_text_stream(
     payload: dict[str, Any] = {}
 
     # Fast parsers first (no Ollama call, instant)
-    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command, _parse_app_control_command):
+    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command):
         result = parser(user_text)
         if isinstance(result, dict):
             payload = result
@@ -636,7 +782,7 @@ def process_text_stream(
     # LLM classification if fast parsers didn't match
     if not payload:
         try:
-            classified = classify_intent(user_text)
+            classified = classify_intent(normalized_text)
         except Exception as exc:
             yield f"I had trouble understanding that: {exc}"
             return
