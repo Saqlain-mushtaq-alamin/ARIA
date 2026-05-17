@@ -27,6 +27,53 @@ from scheduler.tracker import create_schedule_from_text, edit_schedule, show_sch
 from safety.harm_classifier import assess_risk, DANGEROUS, BLOCKED
 from safety.recycle_buffer import safe_delete
 
+# ── Upgrade modules (lazy-loaded to avoid circular imports) ──────────────────
+def _social_comment(tone: str = "thoughtful", **_: Any) -> str:
+    from modules.social_agent import comment_on_post
+    return comment_on_post(tone=tone)
+
+def _explain_selected(**_: Any) -> str:
+    from modules.social_agent import explain_selected_text
+    return explain_selected_text()
+
+def _start_focus(task: str = "deep work", work_minutes: int = 0, **_: Any) -> str:
+    from modules.focus_mode import start_focus_mode
+    return start_focus_mode(task=task, work_min=work_minutes)
+
+def _stop_focus(**_: Any) -> str:
+    from modules.focus_mode import stop_focus_mode
+    return stop_focus_mode()
+
+def _decompose_goal(goal: str = "", deadline: str = "", **_: Any) -> str:
+    from scheduler.goal_decomposer import decompose_goal
+    return decompose_goal(goal=goal, deadline_str=deadline)
+
+def _show_settings(section: str = "", **_: Any) -> str:
+    from config.settings import format_settings
+    return format_settings(section=section or None)
+
+def _change_setting(key: str = "", value: Any = None, **_: Any) -> str:
+    from config.settings import set_value
+    if not key:
+        return "Please specify which setting to change."
+    return set_value(key, value)
+
+def _query_knowledge(topic: str = "", **_: Any) -> str:
+    from memory.knowledge_graph import query_formatted
+    return query_formatted(topic)
+
+def _show_habits(**_: Any) -> str:
+    from memory.habit_tracker import get_all_habits_summary
+    return get_all_habits_summary()
+
+def _mark_habit(habit_name: str = "", **_: Any) -> str:
+    from memory.habit_tracker import mark_habit_done
+    return mark_habit_done(habit_name)
+
+def _show_profile(**_: Any) -> str:
+    from memory.user_profile import get_profile_summary
+    return get_profile_summary()
+
 _GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
 
 
@@ -485,6 +532,19 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "show_schedule":    show_schedule,
     "whats_next":       whats_next,
     "edit_schedule":    edit_schedule,
+
+    # ── Upgrade features ─────────────────────────────────────────────────
+    "comment_on_post":    _social_comment,
+    "explain_selected":   _explain_selected,
+    "start_focus_mode":   _start_focus,
+    "stop_focus_mode":    _stop_focus,
+    "decompose_goal":     _decompose_goal,
+    "show_settings":      _show_settings,
+    "change_setting":     _change_setting,
+    "query_knowledge":    _query_knowledge,
+    "show_habits":        _show_habits,
+    "mark_habit":         _mark_habit,
+    "show_profile":       _show_profile,
 }
 
 INTENT_ALIASES: Dict[str, str] = {
@@ -573,6 +633,35 @@ INTENT_ALIASES: Dict[str, str] = {
     "next_task":        "whats_next",
     "what_next":        "whats_next",
     "edit_plan":        "edit_schedule",
+    # Upgrade features
+    "comment":          "comment_on_post",
+    "generate_comment": "comment_on_post",
+    "social_comment":   "comment_on_post",
+    "explain":          "explain_selected",
+    "explain_text":     "explain_selected",
+    "explain_this":     "explain_selected",
+    "focus":            "start_focus_mode",
+    "focus_mode":       "start_focus_mode",
+    "deep_work":        "start_focus_mode",
+    "start_pomodoro":   "start_focus_mode",
+    "stop_focus":       "stop_focus_mode",
+    "end_focus":        "stop_focus_mode",
+    "break_goal":       "decompose_goal",
+    "plan_goal":        "decompose_goal",
+    "goal":             "decompose_goal",
+    "settings":         "show_settings",
+    "preferences":      "show_settings",
+    "config":           "show_settings",
+    "set_setting":      "change_setting",
+    "update_setting":   "change_setting",
+    "knowledge":        "query_knowledge",
+    "knowledge_graph":  "query_knowledge",
+    "habits":           "show_habits",
+    "my_habits":        "show_habits",
+    "habit_done":       "mark_habit",
+    "log_habit":        "mark_habit",
+    "profile":          "show_profile",
+    "my_profile":       "show_profile",
 }
 
 
@@ -769,6 +858,46 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
     if intent == "edit_schedule":
         command = parameters.get("command") or ""
         return handler(command)
+
+    # ── Upgrade feature intents ─────────────────────────────────────────────
+    if intent == "comment_on_post":
+        return handler(tone=str(parameters.get("tone", "thoughtful")))
+
+    if intent == "explain_selected":
+        return handler()
+
+    if intent == "start_focus_mode":
+        return handler(
+            task=str(parameters.get("task", "deep work")),
+            work_minutes=int(parameters.get("work_minutes", 0)),
+        )
+
+    if intent == "stop_focus_mode":
+        return handler()
+
+    if intent == "decompose_goal":
+        return handler(
+            goal=str(parameters.get("goal", "")),
+            deadline=str(parameters.get("deadline", "")),
+        )
+
+    if intent == "show_settings":
+        return handler(section=str(parameters.get("section", "")))
+
+    if intent == "change_setting":
+        return handler(
+            key=str(parameters.get("key", "")),
+            value=parameters.get("value"),
+        )
+
+    if intent == "query_knowledge":
+        return handler(topic=str(parameters.get("topic", "")))
+
+    if intent in {"show_habits", "show_profile"}:
+        return handler()
+
+    if intent == "mark_habit":
+        return handler(habit_name=str(parameters.get("habit_name", "")))
 
     # ── Generic fallback: pass parameters as kwargs ─────────────────────────
     return handler(**parameters)
