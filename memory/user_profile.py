@@ -530,3 +530,39 @@ def reset_profile(path: str = DEFAULT_PROFILE_PATH) -> str:
     _save_profile(new_profile, path)
     address = name or _DEFAULT_ADDRESS
     return f"Profile reset, {address}. Usage history cleared."
+
+
+def get_profile_summary(path: str = DEFAULT_PROFILE_PATH) -> str:
+    """Return a user-friendly summary of the profile for display."""
+    profile = _load_profile(path)
+    identity = profile.get("identity", {})
+    style = profile.get("style", {})
+    meta = profile.get("meta", {})
+
+    name = identity.get("name") or "Not set"
+    address = identity.get("address_form") or _DEFAULT_ADDRESS
+    interests = ", ".join(identity.get("interests", [])) or "None yet"
+
+    peak_hours = get_peak_hours(path)
+    peak_str = ", ".join(f"{h:02d}:00" for h in peak_hours) if peak_hours else "Not enough data"
+
+    tone = style.get("tone") or "adaptive"
+    detail = style.get("detail_level") or "adaptive"
+    language = style.get("language") or "en"
+
+    interaction_count = meta.get("interaction_count", 0)
+    completion_rate = meta.get("habit_completion_rate", 0)
+
+    lines = [
+        "👤 Your ARIA Profile",
+        "━" * 45,
+        f"  Name: {name}",
+        f"  Address form: {address}",
+        f"  Interests: {interests}",
+        f"  Peak hours: {peak_str}",
+        f"  Tone: {tone}  |  Detail: {detail}  |  Language: {language}",
+        f"  Total interactions: {interaction_count}",
+        f"  Habit completion rate: {completion_rate:.0%}" if isinstance(completion_rate, float) else f"  Habit completion rate: {completion_rate}",
+        "━" * 45,
+    ]
+    return "\n".join(lines)
