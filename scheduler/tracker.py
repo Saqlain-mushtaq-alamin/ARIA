@@ -1110,3 +1110,37 @@ def apply_tired_postpone_rule(
             f"Let’s take a short rest — I moved the last {moved} task(s) to tomorrow morning."
         )
     return None
+
+
+def get_current_scheduled_task(
+    *,
+    day: str | None = None,
+    path: str = DEFAULT_TRACKER_PATH,
+) -> str | None:
+    """Return the task the user should be doing RIGHT NOW, or None.
+
+    Used by the productivity guardian to check if the user is on-task.
+    """
+    blocks = get_schedule_blocks(day, path=path)
+    if not blocks:
+        return None
+
+    now = datetime.now()
+    now_m = now.hour * 60 + now.minute
+
+    for b in blocks:
+        start_str = str(b.get("start") or "")
+        end_str = str(b.get("end") or "")
+        if ":" not in start_str or ":" not in end_str:
+            continue
+        try:
+            sh, sm = start_str.split(":")
+            eh, em = end_str.split(":")
+            s = int(sh) * 60 + int(sm)
+            e = int(eh) * 60 + int(em)
+        except Exception:
+            continue
+        if s <= now_m < e:
+            return str(b.get("task") or "")
+
+    return None
