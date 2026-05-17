@@ -114,6 +114,19 @@ Scheduler:
   whats_next        → no parameters
   edit_schedule     → parameters.command (string)
 
+Upgrade features:
+  comment_on_post   → parameters.tone (optional: "thoughtful", "funny", "supportive")
+  explain_selected  → no parameters (reads highlighted text from screen)
+  start_focus_mode  → parameters.task (string), parameters.work_minutes (optional int)
+  stop_focus_mode   → no parameters
+  decompose_goal    → parameters.goal (string), parameters.deadline (optional string)
+  show_settings     → parameters.section (optional: "emotion", "screen_reader", "llm", etc.)
+  change_setting    → parameters.key (string like "emotion.enabled"), parameters.value (any)
+  query_knowledge   → parameters.topic (string)
+  show_habits       → no parameters
+  mark_habit        → parameters.habit_name (string like "gym", "study")
+  show_profile      → no parameters
+
 Conversational / LLM:
   answer_question   → parameters.prompt (string - the user's full question)
   type_generated_text → parameters.prompt (string)
@@ -128,6 +141,12 @@ Notes for multi-step commands:
   parameters.prompt to describe what to generate.
 - If user mentions typos like "nodepad", "fle explorere", or "activite kinetic",
   normalize to the proper intent and parameters.
+- "show settings" or "show my settings" → show_settings
+- "turn off emotion detector" or "disable screen reader" → change_setting
+- "start focus mode for coding" → start_focus_mode with task="coding"
+- "comment on this post" → comment_on_post
+- "explain this" or "what does this mean" (when text is selected) → explain_selected
+- "plan my goal: learn python in 30 days" → decompose_goal
 
 Return ONLY the JSON. No markdown. No explanation.
 """

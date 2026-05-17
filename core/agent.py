@@ -170,6 +170,18 @@ _INTENT_LABELS: dict[str, str] = {
     "type_generated_text": "Generating and typing text",
     "activate_kinetic_mode": "Activating kinetic mode",
     "deactivate_kinetic_mode": "Deactivating kinetic mode",
+    # Upgrade features
+    "comment_on_post":    "Generating comment for post",
+    "explain_selected":   "Explaining selected text",
+    "start_focus_mode":   "Starting deep work / focus mode",
+    "stop_focus_mode":    "Stopping focus mode",
+    "decompose_goal":     "Breaking down your goal",
+    "show_settings":      "Showing settings",
+    "change_setting":     "Updating setting: {key}",
+    "query_knowledge":    "Searching knowledge graph for: {topic}",
+    "show_habits":        "Showing your habits",
+    "mark_habit":         "Logging habit: {habit_name}",
+    "show_profile":       "Showing your profile",
 }
 
 
@@ -273,7 +285,20 @@ def _build_context_prompt(prompt: str) -> str:
     # Screen activity context (LLaVA screen reader — no image stored)
     screen_block = get_screen_context_block()
 
-    parts = [p for p in [vibe_block, memory_block, screen_block] if p]
+    # Cognitive load state (keyboard timing analysis)
+    cognitive_block = ""
+    try:
+        from vision.cognitive_monitor import get_cognitive_state
+        cog = get_cognitive_state()
+        if cog and cog.get("label") != "low":
+            cognitive_block = (
+                f"Cognitive state: load={cog.get('cognitive_load', '?')}/100 "
+                f"({cog.get('label', '?')}). {cog.get('recommendation', '')}"
+            )
+    except Exception:
+        pass
+
+    parts = [p for p in [vibe_block, memory_block, screen_block, cognitive_block] if p]
     if not parts:
         return prompt
     return "Context (use only if relevant):\n\n" + "\n\n".join(parts) + f"\n\nUser: {prompt}"
@@ -765,6 +790,14 @@ def process_text_stream(
             with llm_busy_context():
                 reply = generate_text(augmented).strip()
             yield reply or "I'm not sure how to respond to that."
+            # Subconscious layer: detect latent concerns
+            try:
+                from core.subconscious_layer import analyse
+                nudge = analyse(user_text)
+                if nudge:
+                    yield f"\n💡 {nudge}"
+            except Exception:
+                pass
             return
     except Exception:
         pass  # fall through to action classification
@@ -798,6 +831,14 @@ def process_text_stream(
             with llm_busy_context():
                 _reply = generate_text(augmented).strip()
             yield _reply or "I'm not sure how to respond."
+            # Subconscious layer: detect latent concerns
+            try:
+                from core.subconscious_layer import analyse
+                nudge = analyse(user_text)
+                if nudge:
+                    yield f"\n💡 {nudge}"
+            except Exception:
+                pass
             return
 
         payload = classified
