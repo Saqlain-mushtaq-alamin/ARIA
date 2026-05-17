@@ -1065,3 +1065,22 @@ def empty_recycle_buffer(older_than_hours: int = 48) -> str:
             except Exception:
                 pass
     return f"Cleared {removed} item(s) older than {older_than_hours}h from recycle buffer."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Selected text detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_selected_text() -> str:
+    """Copy the currently selected text via Ctrl+C and return it.
+
+    Restores the original clipboard contents afterward.
+    """
+    old_clip = pyperclip.paste()
+    pyperclip.copy("")
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "c")
+    time.sleep(0.15)
+    selected = pyperclip.paste()
+    pyperclip.copy(old_clip)  # restore clipboard
+    return selected.strip()
