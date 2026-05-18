@@ -74,6 +74,29 @@ def _show_profile(**_: Any) -> str:
     from memory.user_profile import get_profile_summary
     return get_profile_summary()
 
+def _download(
+    target: str = "",
+    mode: str = "auto",
+    output_name: str = "",
+    downloads_dir: str = "",
+    open_folder: bool = False,
+    open_file: bool = False,
+    allow_large: bool = False,
+    strict: bool = False,
+    **_: Any,
+) -> str:
+    from modules.downloader import download_command
+    return download_command(
+        target=target,
+        mode=mode,
+        output_name=output_name or None,
+        downloads_dir=downloads_dir or None,
+        open_folder=bool(open_folder),
+        open_file=bool(open_file),
+        allow_large=bool(allow_large),
+        strict=bool(strict),
+    )
+
 _GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
 
 
@@ -526,6 +549,7 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "get_news":         _get_news,
     "search_papers":    _search_papers,
     "get_stock":        _get_stock,
+    "download":         _download,
 
     # Scheduler
     "create_schedule":  create_schedule_from_text,
@@ -624,6 +648,9 @@ INTENT_ALIASES: Dict[str, str] = {
     "arxiv":            "search_papers",
     "stock":            "get_stock",
     "price":            "get_stock",
+    "download":         "download",
+    "download_file":    "download",
+    "downloader":       "download",
     # Scheduler
     "schedule":         "create_schedule",
     "plan_day":         "create_schedule",
@@ -846,6 +873,28 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
         if not symbol:
             raise ValueError("Stock symbol is required")
         return handler(symbol=str(symbol))
+
+    if intent == "download":
+        target = (
+            parameters.get("url")
+            or parameters.get("target")
+            or parameters.get("query")
+            or parameters.get("title")
+            or parameters.get("link")
+            or ""
+        )
+        if not str(target).strip():
+            raise ValueError("Download target is required")
+        return handler(
+            target=str(target),
+            mode=str(parameters.get("mode") or parameters.get("type") or parameters.get("kind") or "auto"),
+            output_name=str(parameters.get("output_name") or parameters.get("output") or parameters.get("filename") or ""),
+            downloads_dir=str(parameters.get("downloads_dir") or parameters.get("download_dir") or parameters.get("folder") or ""),
+            open_folder=bool(parameters.get("open_folder", False)),
+            open_file=bool(parameters.get("open_file", False)),
+            allow_large=bool(parameters.get("allow_large", False)),
+            strict=bool(parameters.get("strict", False)),
+        )
 
     # ── Scheduler intents ───────────────────────────────────────────────────
     if intent == "create_schedule":

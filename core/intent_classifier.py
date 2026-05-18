@@ -108,6 +108,14 @@ Browser & web:
   search_papers     → parameters.query (string), parameters.source (optional: arxiv/scholar/pubmed)
   get_stock         → parameters.symbol (string)
 
+Downloads:
+    download          → parameters.url (string for file/video/audio),
+                                            parameters.mode (optional: auto/video/audio/paper),
+                                            parameters.query (string when mode=paper),
+                                            parameters.output_name (optional string),
+                                            parameters.open_folder (optional bool),
+                                            parameters.open_file (optional bool)
+
 Scheduler:
   create_schedule   → parameters.text (string with task descriptions)
   show_schedule     → no parameters
@@ -147,6 +155,11 @@ Notes for multi-step commands:
 - "comment on this post" → comment_on_post
 - "explain this" or "what does this mean" (when text is selected) → explain_selected
 - "plan my goal: learn python in 30 days" → decompose_goal
+- "download https://example.com/file.pdf" → download with url
+- "download this youtube video" → download with mode=video and url
+- "download paper attention is all you need" → download with mode=paper and query
+- If user says "download and open it" → set download parameters.open_file=true
+- If user says "download and open folder" → set download parameters.open_folder=true
 
 Return ONLY the JSON. No markdown. No explanation.
 """
@@ -211,6 +224,7 @@ def _normalize_user_text(user_text: str) -> str:
         (r"\bkinitic\b", "kinetic"),
         (r"\bbluetooh\b", "bluetooth"),
         (r"\bwi[\s-]?fi\b", "wifi"),
+        (r"\bdownlad\b", "download"),
     ]
     for pattern, repl in replacements:
         text = re.sub(pattern, repl, text, flags=re.IGNORECASE)

@@ -161,6 +161,7 @@ _INTENT_LABELS: dict[str, str] = {
     "get_news":         "Fetching news{topic_suffix}",
     "search_papers":    "Searching {source} for: {query}",
     "get_stock":        "Fetching stock price for: {symbol}",
+    "download":         "Downloading: {target}",
     "create_schedule":  "Building your daily schedule",
     "show_schedule":    "Showing your schedule",
     "whats_next":       "Checking what's next on your schedule",
@@ -190,6 +191,8 @@ def _label_for_step(intent: str, parameters: dict) -> str:
     template = _INTENT_LABELS.get(intent, f"Running: {intent.replace('_', ' ')}")
     try:
         params = {k: (v or "") for k, v in parameters.items()}
+        if intent == "download" and not params.get("target"):
+            params["target"] = params.get("url") or params.get("query") or params.get("title") or ""
         params.setdefault("topic_suffix",
                           f" on '{parameters.get('topic')}'" if parameters.get("topic") else "")
         return template.format(**params)

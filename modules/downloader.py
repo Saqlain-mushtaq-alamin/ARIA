@@ -27,6 +27,8 @@ AUTO FOLDER STRUCTURE:
   └── others/        ← anything unrecognized
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -40,6 +42,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 # ─────────────────────────────────────────────────────────────
@@ -221,25 +224,25 @@ class FileManager:
     # Reverse lookup: ext → category
     _EXT_MAP: dict[str, str] = {}
 
-    def __init__(self, base: str = None):
+    def __init__(self, base: str | None = None):
         self.BASE = base or self.BASE
         for cat, exts in self.CATEGORIES.items():
             for ext in exts:
                 self._EXT_MAP[ext] = cat
 
-    def categorise(self, filename: str, override_category: str = None) -> str:
+    def categorise(self, filename: str, override_category: str | None = None) -> str:
         if override_category:
             return override_category
         ext = Path(filename).suffix.lower()
         return self._EXT_MAP.get(ext, "others")
 
-    def get_folder(self, filename: str, override_category: str = None) -> Path:
+    def get_folder(self, filename: str, override_category: str | None = None) -> Path:
         cat = self.categorise(filename, override_category)
         folder = Path(self.BASE) / cat
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def resolve_path(self, filename: str, override_category: str = None) -> Path:
+    def resolve_path(self, filename: str, override_category: str | None = None) -> Path:
         folder = self.get_folder(filename, override_category)
         target = folder / filename
         # Avoid overwriting: append counter if file exists
@@ -279,15 +282,17 @@ class FileManager:
 
 
 def _fmt_size(b: int) -> str:
+    size = float(b)
     for unit in ("B", "KB", "MB", "GB"):
-        if b < 1024:
-            return f"{b:.1f} {unit}"
-        b /= 1024
-    return f"{b:.1f} TB"
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
-def _sanitize(name: str, max_len: int = 120) -> str:
+def _sanitize(name: str | None, max_len: int = 120) -> str:
+    safe = name or "download"
     keep = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-,()")
-    return "".join(c if c in keep else "_" for c in name)[:max_len].strip()
+    return "".join(c if c in keep else "_" for c in safe)[:max_len].strip()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -295,12 +300,12 @@ def _sanitize(name: str, max_len: int = 120) -> str:
 # ─────────────────────────────────────────────────────────────
 def download_file(
     url: str,
-    output_name: str = None,
-    override_category: str = None,
-    guard: "SafetyGuard" = None,
-    fm: "FileManager" = None,
+    output_name: str | None = None,
+    override_category: str | None = None,
+    guard: SafetyGuard | None = None,
+    fm: FileManager | None = None,
     allow_large: bool = False,
-) -> bool:
+) -> Path | None:
 
     guard = guard or SafetyGuard()
     fm    = fm    or FileManager()
@@ -309,7 +314,7 @@ def download_file(
     safe, reason = guard.check_url(url)
     if not safe:
         blocked(reason)
-        return False
+        return None
 
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; SmartDownloader/3.0)"}
@@ -321,7 +326,7 @@ def download_file(
                 safe, reason = guard.check_response_headers(response)
                 if not safe:
                     blocked(reason)
-                    return False
+                    return None
 
             # Determine filename
             if not output_name:
@@ -343,7 +348,7 @@ def download_file(
             info(f"Category  → {Fore.YELLOW}{category}{Style.RESET_ALL}")
             info(f"Saving to → {Fore.YELLOW}{filepath}{Style.RESET_ALL}")
 
-            total = int(response.headers.get("content-length", 0))
+            total = int(response.headers.get("content-length", 0) or 0)
             first_chunk_checked = False
 
             with open(filepath, "wb") as f, tqdm(
@@ -359,14 +364,14 @@ def download_file(
                             f.close()
                             filepath.unlink(missing_ok=True)
                             blocked(reason)
-                            return False
+                            return None
                         first_chunk_checked = True
 
                     f.write(chunk)
                     bar.update(len(chunk))
 
         ok(f"Done! → {filepath}")
-        return True
+        return filepath
 
     except requests.exceptions.HTTPError as e:
         err(f"HTTP Error: {e}")
@@ -376,7 +381,7 @@ def download_file(
         err("Request timed out.")
     except Exception as e:
         err(f"Unexpected error: {e}")
-    return False
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -385,11 +390,11 @@ def download_file(
 def download_media(
     url: str,
     audio_only: bool = False,
-    output_name: str = None,
-    fm: "FileManager" = None,
-    guard: "SafetyGuard" = None,
-):
-    import yt_dlp
+    output_name: str | None = None,
+    fm: FileManager | None = None,
+    guard: SafetyGuard | None = None,
+) -> Path | None:
+    import yt_dlp  # type: ignore[reportMissingModuleSource]
     guard = guard or SafetyGuard()
     fm    = fm    or FileManager()
 
@@ -405,17 +410,17 @@ def download_media(
     if output_name:
         template = str(folder / f"{_sanitize(output_name)}.%(ext)s")
 
-    ydl_opts = {
+    ydl_opts: dict[str, Any] = {
         "outtmpl": template,
         "quiet": True,
         "no_warnings": True,
         "progress_hooks": [
             lambda d: print(
-                f"\r  ⬇  {d.get('_percent_str','').strip():>6}  "
-                f"{d.get('_speed_str','').strip():>12}  "
-                f"ETA {d.get('eta','?')}s   ",
+                f"\r  ⬇  {str(d.get('_percent_str', '')).strip():>6}  "
+                f"{str(d.get('_speed_str', '')).strip():>12}  "
+                f"ETA {d.get('eta', '?')}s   ",
                 end="", flush=True,
-            ) if d["status"] == "downloading" else None
+            ) if d.get("status") == "downloading" else None
         ],
     }
 
@@ -438,9 +443,11 @@ def download_media(
             ydl.download([url])
         print()
         ok("Media download complete!")
+        return folder
     except Exception as e:
         print()
         err(f"yt-dlp error: {e}")
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -453,19 +460,25 @@ class PaperDownloader:
     CROSSREF_API  = "https://api.crossref.org/works"
     HEADERS       = {"User-Agent": "SmartDownloader/3.0 (education; non-commercial)"}
 
-    def __init__(self, fm: FileManager, guard: SafetyGuard):
-        self.fm     = fm
-        self.guard  = guard
+    def __init__(self, fm: FileManager | None = None, guard: SafetyGuard | None = None):
+        self.fm     = fm or FileManager()
+        self.guard  = guard or SafetyGuard()
         self.log    = []
+
+    def _text_or(self, node: ET.Element | None, default: str = "") -> str:
+        if node is None or node.text is None:
+            return default
+        return node.text.strip()
 
     # ── Search APIs ──────────────────────────────────────────
     def _semantic_scholar(self, title: str) -> dict | None:
         try:
-            r = requests.get(self.S2_API, headers=self.HEADERS, timeout=10, params={
+            params: dict[str, str | int] = {
                 "query": title,
                 "fields": "title,authors,year,openAccessPdf,externalIds,abstract",
                 "limit": 5,
-            })
+            }
+            r = requests.get(self.S2_API, headers=self.HEADERS, timeout=10, params=params)
             r.raise_for_status()
             items = r.json().get("data", [])
             if items:
@@ -483,26 +496,29 @@ class PaperDownloader:
             warn(f"Semantic Scholar: {e}")
         return None
 
-    def _arxiv(self, title: str, arxiv_id: str = None) -> dict | None:
+    def _arxiv(self, title: str, arxiv_id: str | None = None) -> dict | None:
         try:
             query = f"id:{arxiv_id}" if arxiv_id else f"ti:{urllib.parse.quote(title)}"
-            r = requests.get(self.ARXIV_API, headers=self.HEADERS, timeout=10,
-                             params={"search_query": query, "max_results": 3})
+            params: dict[str, str | int] = {"search_query": query, "max_results": 3}
+            r = requests.get(self.ARXIV_API, headers=self.HEADERS, timeout=10, params=params)
             r.raise_for_status()
             ns   = {"a": "http://www.w3.org/2005/Atom"}
             root = ET.fromstring(r.text)
             for e in root.findall("a:entry", ns):
-                aid = e.find("a:id", ns).text.split("/")[-1]
+                aid_raw = self._text_or(e.find("a:id", ns))
+                if not aid_raw:
+                    continue
+                aid = aid_raw.split("/")[-1]
                 return {
-                    "title":    (e.find("a:title", ns).text or title).strip(),
+                    "title":    self._text_or(e.find("a:title", ns), title),
                     "authors":  ", ".join(
-                        (a.find("a:name", ns).text or "")
+                        self._text_or(a.find("a:name", ns))
                         for a in e.findall("a:author", ns)[:3]
                     ),
-                    "year":     (e.find("a:published", ns).text or "")[:4],
+                    "year":     self._text_or(e.find("a:published", ns))[:4],
                     "pdf_url":  f"https://arxiv.org/pdf/{aid}.pdf",
                     "arxiv_id": aid,
-                    "abstract": (e.find("a:summary", ns).text or "")[:300].strip(),
+                    "abstract": self._text_or(e.find("a:summary", ns))[:300],
                     "source":   "arXiv",
                 }
         except Exception as e:
@@ -511,8 +527,8 @@ class PaperDownloader:
 
     def _crossref_doi(self, title: str) -> str | None:
         try:
-            r = requests.get(self.CROSSREF_API, headers=self.HEADERS, timeout=10,
-                             params={"query.title": title, "rows": 1, "select": "DOI"})
+            params: dict[str, str | int] = {"query.title": title, "rows": 1, "select": "DOI"}
+            r = requests.get(self.CROSSREF_API, headers=self.HEADERS, timeout=10, params=params)
             r.raise_for_status()
             items = r.json().get("message", {}).get("items", [])
             if items:
@@ -556,10 +572,13 @@ class PaperDownloader:
             self.log.append({"query": title, "status": status})
             return status
 
-        print(f"\n  📄 {Fore.WHITE}{meta['title']}{Style.RESET_ALL}")
-        if meta.get("authors"): print(f"  👤 {meta['authors']}")
-        if meta.get("year"):    print(f"  📅 {meta['year']}  via {meta.get('source','')}")
-        if meta.get("abstract"):print(f"  📝 {meta['abstract'][:180]}…")
+        print(f"\n  📄 {Fore.WHITE}{meta.get('title', title)}{Style.RESET_ALL}")
+        if meta.get("authors"):
+            print(f"  👤 {meta['authors']}")
+        if meta.get("year"):
+            print(f"  📅 {meta['year']}  via {meta.get('source','')}")
+        if meta.get("abstract"):
+            print(f"  📝 {meta['abstract'][:180]}…")
 
         pdf_url = meta.get("pdf_url")
         if not pdf_url:
@@ -567,18 +586,18 @@ class PaperDownloader:
             self.log.append({"query": title, "status": "no_pdf", "meta": meta})
             return "no_pdf"
 
-        safe_title = _sanitize(meta["title"])
+        safe_title = _sanitize(meta.get("title") or title)
         year_tag   = f"_{meta['year']}" if meta.get("year") else ""
         filename   = f"{safe_title}{year_tag}.pdf"
 
-        success = download_file(
+        filepath = download_file(
             url=pdf_url,
             output_name=filename,
             override_category="papers",
             guard=self.guard,
             fm=self.fm,
         )
-        status = "ok" if success else "failed"
+        status = "ok" if filepath else "failed"
         self.log.append({"query": title, "status": status, "meta": meta})
         return status
 
@@ -615,6 +634,81 @@ class PaperDownloader:
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(self.log, f, indent=2, default=str)
         print(Style.RESET_ALL + f"\n  📋 Log saved → {log_path}\n")
+
+
+def _is_url(value: str) -> bool:
+    if not value:
+        return False
+    parsed = urllib.parse.urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def download_command(
+    target: str,
+    mode: str = "auto",
+    output_name: str | None = None,
+    downloads_dir: str | None = None,
+    open_folder: bool = False,
+    open_file: bool = False,
+    allow_large: bool = False,
+    strict: bool = False,
+) -> str:
+    if not target or not str(target).strip():
+        return "No download target provided."
+
+    guard = SafetyGuard(strict=bool(strict))
+    fm = FileManager(base=str(downloads_dir) if downloads_dir else None)
+    mode = (mode or "auto").strip().lower()
+
+    if mode in {"video", "audio"}:
+        if not _is_url(target):
+            return "Video/audio downloads require a valid URL."
+        folder = download_media(
+            url=str(target),
+            audio_only=(mode == "audio"),
+            output_name=output_name,
+            fm=fm,
+            guard=guard,
+        )
+        if not folder:
+            return "Media download failed."
+        if open_folder:
+            try:
+                os.startfile(str(folder))
+            except Exception:
+                pass
+        return f"Download complete. Saved in: {folder}"
+
+    if mode == "paper":
+        pd = PaperDownloader(fm=fm, guard=guard)
+        status = pd.download(str(target))
+        return "Paper download complete." if status == "ok" else f"Paper download: {status}."
+
+    if not _is_url(target):
+        return "Please provide a URL to download, or say 'download paper <title>'."
+
+    filepath = download_file(
+        url=str(target),
+        output_name=output_name,
+        guard=guard,
+        fm=fm,
+        allow_large=bool(allow_large),
+    )
+    if not filepath:
+        return "Download failed."
+
+    if open_file:
+        try:
+            os.startfile(str(filepath))
+        except Exception:
+            pass
+    if open_folder:
+        try:
+            os.startfile(str(filepath.parent))
+        except Exception:
+            pass
+
+    return f"Download complete. Saved to: {filepath}"
 
 
 # ─────────────────────────────────────────────────────────────

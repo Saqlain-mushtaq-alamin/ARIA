@@ -108,6 +108,10 @@ _CLARIFICATION_TEMPLATES: Dict[tuple, str] = {
         "What information should I fill into the form?",
     ("extract_text", "url"):
         "Which webpage should I extract text from? Please give me the URL.{memory}",
+    ("download", "url"):
+        "Which URL should I download? Please paste the link.{memory}",
+    ("download", "query"):
+        "Which paper title should I download? You can say something like 'download paper attention is all you need'.{memory}",
 }
 
 # Confirmation questions for dangerous/irreversible intents
@@ -401,11 +405,21 @@ _REQUIRED_FIELDS: Dict[str, List[str]] = {
     "create_schedule":  ["text"],
     "edit_schedule":    ["command"],
     "send_message":     ["contact", "message"],
+    "download":         [],
 }
 
 
 def _infer_missing_fields(intent: str, parameters: Dict[str, Any]) -> List[str]:
     """Return the list of required fields that are absent from parameters."""
+    if intent == "download":
+        mode = str(parameters.get("mode", "auto")).strip().lower()
+        if mode == "paper":
+            if parameters.get("query") or parameters.get("title") or parameters.get("target"):
+                return []
+            return ["query"]
+        if parameters.get("url") or parameters.get("target") or parameters.get("link"):
+            return []
+        return ["url"]
     required = _REQUIRED_FIELDS.get(intent, [])
     missing: List[str] = []
     for field in required:
