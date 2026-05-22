@@ -4,6 +4,11 @@ Semi-transparent floating panel: task name, mic status, gesture toggle, quick ch
 """
 
 import sys
+import time
+from datetime import datetime
+from typing import Optional
+
+import psutil
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QGraphicsDropShadowEffect,
@@ -18,6 +23,11 @@ from PyQt6.QtGui import (
     QColor, QPainter, QPen, QBrush, QLinearGradient,
     QFont, QFontDatabase, QPainterPath, QRegion, QCursor
 )
+
+try:
+    import GPUtil  # type: ignore
+except Exception:
+    GPUtil = None
 
 
 # ── Colour tokens ──────────────────────────────────────────────────────────────
@@ -160,6 +170,94 @@ class CornerAccent(QWidget):
             p.drawLine(s, 0, s, s); p.drawLine(0, s, s, s)
 
 
+class Sparkline(QWidget):
+    """Minimal line chart for realtime metrics."""
+
+    def __init__(self, color: QColor = CLR_ACCENT, max_points: int = 48, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self._max_points = max_points
+        self._values: list[float] = []
+        self._min_value = 0.0
+        self._max_value = 100.0
+        self.setFixedHeight(18)
+
+    def set_range(self, min_value: float, max_value: float) -> None:
+        self._min_value = min_value
+        self._max_value = max_value if max_value > min_value else min_value + 1.0
+
+    def push_value(self, value: Optional[float]) -> None:
+        if value is None:
+            return
+        self._values.append(float(value))
+        if len(self._values) > self._max_points:
+            self._values = self._values[-self._max_points:]
+        self.update()
+
+    def paintEvent(self, a0):
+        if len(self._values) < 2:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        h = self.height()
+        min_v = self._min_value
+        max_v = self._max_value
+        span = max(1e-6, max_v - min_v)
+
+        step = w / max(1, self._max_points - 1)
+        path = QPainterPath()
+        for i, value in enumerate(self._values):
+            x = i * step
+            norm = max(0.0, min(1.0, (value - min_v) / span))
+            y = h - (norm * (h - 2)) - 1
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        glow = QColor(self._color)
+        glow.setAlpha(40)
+        p.strokePath(path, QPen(glow, 3))
+        p.strokePath(path, QPen(self._color, 1.3))
+
+
+class StatRow(QWidget):
+    """Label + sparkline + value readout."""
+
+    def __init__(self, label: str, color: QColor, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self._label = QLabel(label)
+        self._label.setFixedWidth(58)
+        self._label.setStyleSheet(
+            "font-size:9px; letter-spacing:1px; color:#94a3b8;"
+        )
+
+        self._spark = Sparkline(color)
+        self._spark.setMinimumWidth(90)
+
+        self._value = QLabel("--")
+        self._value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._value.setFixedWidth(58)
+        self._value.setStyleSheet(
+            "font-size:9px; letter-spacing:1px; color:#e2e8f0;"
+        )
+
+        layout.addWidget(self._label)
+        layout.addWidget(self._spark, 1)
+        layout.addWidget(self._value)
+
+    def set_value(self, value: Optional[float], text: str, *, min_value: float, max_value: float) -> None:
+        self._value.setText(text)
+        self._spark.set_range(min_value, max_value)
+        if value is not None:
+            self._spark.push_value(value)
+
+
 class AriaOverlay(QWidget):
     """
     Main always-on-top HUD overlay for ARIA.
@@ -188,6 +286,8 @@ class AriaOverlay(QWidget):
         self._mic_muted     = False
         self._task_name     = "No active task"
         self._collapsed     = False
+        self._last_disk_io  = None
+        self._last_disk_ts  = None
 
         self._init_window()
         self._build_ui()
@@ -197,6 +297,11 @@ class AriaOverlay(QWidget):
         self._blink_timer = QTimer(self)
         self._blink_timer.timeout.connect(self._blink_tick)
         self._blink_phase = True
+
+        psutil.cpu_percent(interval=None)
+        self._stats_timer = QTimer(self)
+        self._stats_timer.timeout.connect(self._refresh_stats)
+        self._stats_timer.start(1000)
 
     # ── Window setup ──────────────────────────────────────────────────────────
 
@@ -209,7 +314,7 @@ class AriaOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setMinimumWidth(280)
-        self.resize(310, 170)
+        self.resize(360, 300)
         # Position: top-right of primary screen
         screen = QApplication.primaryScreen()
         if screen is not None:
@@ -315,6 +420,43 @@ class AriaOverlay(QWidget):
         status_row.addWidget(self._gesture_btn)
         body_layout.addLayout(status_row)
 
+        # ── Time + telemetry ───────────────────────────────────────────────
+        time_row = QHBoxLayout()
+        time_row.setSpacing(8)
+
+        self._time_label = GlowLabel("--:--:--", CLR_ACCENT)
+        self._time_label.setStyleSheet(
+            "font-size:16px; letter-spacing:2px; color:#e2e8f0;"
+        )
+        self._date_label = QLabel("-- --- ----")
+        self._date_label.setStyleSheet(
+            "font-size:9px; letter-spacing:2px; color:#64748b;"
+        )
+
+        time_col = QVBoxLayout()
+        time_col.setSpacing(1)
+        time_col.addWidget(self._time_label)
+        time_col.addWidget(self._date_label)
+        time_row.addLayout(time_col)
+        time_row.addStretch()
+        body_layout.addLayout(time_row)
+
+        stats_box = QVBoxLayout()
+        stats_box.setSpacing(4)
+
+        self._cpu_row = StatRow("CPU", CLR_ACCENT)
+        self._gpu_row = StatRow("GPU", CLR_ACCENT2)
+        self._ram_row = StatRow("RAM", CLR_SUCCESS)
+        self._ssd_row = StatRow("SSD", QColor(251, 191, 36))
+        self._disk_row = StatRow("C:\\", QColor(148, 163, 184))
+
+        stats_box.addWidget(self._cpu_row)
+        stats_box.addWidget(self._gpu_row)
+        stats_box.addWidget(self._ram_row)
+        stats_box.addWidget(self._ssd_row)
+        stats_box.addWidget(self._disk_row)
+        body_layout.addLayout(stats_box)
+
         # ── Quick chat input ──────────────────────────────────────────────────
         chat_row = QHBoxLayout()
         chat_row.setSpacing(6)
@@ -406,6 +548,63 @@ class AriaOverlay(QWidget):
             " border-radius:4px; color:#475569; font-size:9px; letter-spacing:2px; padding:0 6px; }"
             "QPushButton:hover { border-color: rgba(0,229,255,80); color:#64748b; }"
         )
+
+    # ── Telemetry ───────────────────────────────────────────────────────────
+
+    def _refresh_stats(self) -> None:
+        now = datetime.now()
+        self._time_label.setText(now.strftime("%H:%M:%S"))
+        self._date_label.setText(now.strftime("%a %d %b %Y").upper())
+
+        cpu = psutil.cpu_percent(interval=None)
+        self._cpu_row.set_value(cpu, f"{cpu:4.0f}%", min_value=0.0, max_value=100.0)
+
+        ram = psutil.virtual_memory().percent
+        self._ram_row.set_value(ram, f"{ram:4.0f}%", min_value=0.0, max_value=100.0)
+
+        gpu = self._get_gpu_load()
+        if gpu is None:
+            self._gpu_row.set_value(None, "N/A", min_value=0.0, max_value=100.0)
+        else:
+            self._gpu_row.set_value(gpu, f"{gpu:4.0f}%", min_value=0.0, max_value=100.0)
+
+        ssd_speed = self._get_disk_speed_mb()
+        self._ssd_row.set_value(ssd_speed, f"{ssd_speed:4.0f} MB/s", min_value=0.0, max_value=1000.0)
+
+        try:
+            usage = psutil.disk_usage("C:\\")
+            free_pct = (usage.free / max(1, usage.total)) * 100.0
+            self._disk_row.set_value(free_pct, f"{free_pct:4.0f}%", min_value=0.0, max_value=100.0)
+        except Exception:
+            self._disk_row.set_value(None, "N/A", min_value=0.0, max_value=100.0)
+
+    def _get_gpu_load(self) -> Optional[float]:
+        if GPUtil is None:
+            return None
+        try:
+            gpus = GPUtil.getGPUs()
+            if not gpus:
+                return None
+            return max(0.0, min(100.0, gpus[0].load * 100.0))
+        except Exception:
+            return None
+
+    def _get_disk_speed_mb(self) -> float:
+        try:
+            io = psutil.disk_io_counters()
+            now = time.monotonic()
+            if self._last_disk_io is None or self._last_disk_ts is None:
+                self._last_disk_io = io
+                self._last_disk_ts = now
+                return 0.0
+            dt = max(1e-6, now - self._last_disk_ts)
+            d_read = io.read_bytes - self._last_disk_io.read_bytes
+            d_write = io.write_bytes - self._last_disk_io.write_bytes
+            self._last_disk_io = io
+            self._last_disk_ts = now
+            return max(0.0, (d_read + d_write) / dt / (1024 * 1024))
+        except Exception:
+            return 0.0
 
     # ── Dragging ──────────────────────────────────────────────────────────────
 
