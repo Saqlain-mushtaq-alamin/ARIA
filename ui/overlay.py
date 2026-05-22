@@ -10,7 +10,7 @@ from typing import Optional
 
 import psutil
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QGraphicsDropShadowEffect,
     QFrame, QSizeGrip
 )
@@ -28,6 +28,11 @@ try:
     import GPUtil  # type: ignore
 except Exception:
     GPUtil = None
+
+try:
+    import pynvml  # type: ignore
+except Exception:
+    pynvml = None
 
 
 # ── Colour tokens ──────────────────────────────────────────────────────────────
@@ -170,92 +175,76 @@ class CornerAccent(QWidget):
             p.drawLine(s, 0, s, s); p.drawLine(0, s, s, s)
 
 
-class Sparkline(QWidget):
-    """Minimal line chart for realtime metrics."""
+class PieGauge(QWidget):
+    """Circular gauge with centered percentage."""
 
-    def __init__(self, color: QColor = CLR_ACCENT, max_points: int = 48, parent=None):
+    def __init__(self, color: QColor = CLR_ACCENT, parent=None):
         super().__init__(parent)
         self._color = color
-        self._max_points = max_points
-        self._values: list[float] = []
-        self._min_value = 0.0
-        self._max_value = 100.0
-        self.setFixedHeight(18)
+        self._percent = 0.0
+        self._text = "0%"
+        self.setFixedSize(48, 48)
 
-    def set_range(self, min_value: float, max_value: float) -> None:
-        self._min_value = min_value
-        self._max_value = max_value if max_value > min_value else min_value + 1.0
-
-    def push_value(self, value: Optional[float]) -> None:
-        if value is None:
-            return
-        self._values.append(float(value))
-        if len(self._values) > self._max_points:
-            self._values = self._values[-self._max_points:]
+    def set_value(self, percent: float, text: str) -> None:
+        self._percent = max(0.0, min(100.0, float(percent)))
+        self._text = text
         self.update()
 
     def paintEvent(self, a0):
-        if len(self._values) < 2:
-            return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w = self.width()
-        h = self.height()
-        min_v = self._min_value
-        max_v = self._max_value
-        span = max(1e-6, max_v - min_v)
+        rect = self.rect().adjusted(5, 5, -5, -5)
 
-        step = w / max(1, self._max_points - 1)
-        path = QPainterPath()
-        for i, value in enumerate(self._values):
-            x = i * step
-            norm = max(0.0, min(1.0, (value - min_v) / span))
-            y = h - (norm * (h - 2)) - 1
-            if i == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
+        base_pen = QPen(QColor(30, 45, 69, 160), 5)
+        p.setPen(base_pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(rect)
 
-        glow = QColor(self._color)
-        glow.setAlpha(40)
-        p.strokePath(path, QPen(glow, 3))
-        p.strokePath(path, QPen(self._color, 1.3))
+        arc_pen = QPen(self._color, 5)
+        arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(arc_pen)
+        span = -int(self._percent / 100.0 * 360 * 16)
+        p.drawArc(rect, 90 * 16, span)
+
+        p.setPen(QPen(CLR_TEXT))
+        font = QFont("Consolas", 8)
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
 
 
-class StatRow(QWidget):
-    """Label + sparkline + value readout."""
+class StatTile(QWidget):
+    """Name + pie gauge + value text."""
 
     def __init__(self, label: str, color: QColor, parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(1)
 
         self._label = QLabel(label)
-        self._label.setFixedWidth(58)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setStyleSheet(
-            "font-size:9px; letter-spacing:1px; color:#94a3b8;"
+            "font-size:8px; letter-spacing:1px; color:#94a3b8;"
         )
 
-        self._spark = Sparkline(color)
-        self._spark.setMinimumWidth(90)
+        self._gauge = PieGauge(color)
 
         self._value = QLabel("--")
-        self._value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._value.setFixedWidth(58)
+        self._value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._value.setStyleSheet(
-            "font-size:9px; letter-spacing:1px; color:#e2e8f0;"
+            "font-size:8px; letter-spacing:1px; color:#e2e8f0;"
         )
 
         layout.addWidget(self._label)
-        layout.addWidget(self._spark, 1)
+        layout.addWidget(self._gauge, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._value)
 
-    def set_value(self, value: Optional[float], text: str, *, min_value: float, max_value: float) -> None:
+        self.setFixedWidth(64)
+
+    def set_value(self, percent: float, text: str) -> None:
+        self._gauge.set_value(percent, f"{percent:0.0f}%")
         self._value.setText(text)
-        self._spark.set_range(min_value, max_value)
-        if value is not None:
-            self._spark.push_value(value)
 
 
 class AriaOverlay(QWidget):
@@ -288,6 +277,7 @@ class AriaOverlay(QWidget):
         self._collapsed     = False
         self._last_disk_io  = None
         self._last_disk_ts  = None
+        self._nvml_ready    = False
 
         self._init_window()
         self._build_ui()
@@ -299,6 +289,7 @@ class AriaOverlay(QWidget):
         self._blink_phase = True
 
         psutil.cpu_percent(interval=None)
+        self._init_nvml()
         self._stats_timer = QTimer(self)
         self._stats_timer.timeout.connect(self._refresh_stats)
         self._stats_timer.start(1000)
@@ -314,7 +305,7 @@ class AriaOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setMinimumWidth(280)
-        self.resize(360, 300)
+        self.resize(420, 290)
         # Position: top-right of primary screen
         screen = QApplication.primaryScreen()
         if screen is not None:
@@ -441,21 +432,24 @@ class AriaOverlay(QWidget):
         time_row.addStretch()
         body_layout.addLayout(time_row)
 
-        stats_box = QVBoxLayout()
-        stats_box.setSpacing(4)
+        stats_grid = QGridLayout()
+        stats_grid.setSpacing(8)
 
-        self._cpu_row = StatRow("CPU", CLR_ACCENT)
-        self._gpu_row = StatRow("GPU", CLR_ACCENT2)
-        self._ram_row = StatRow("RAM", CLR_SUCCESS)
-        self._ssd_row = StatRow("SSD", QColor(251, 191, 36))
-        self._disk_row = StatRow("C:\\", QColor(148, 163, 184))
+        self._cpu_tile = StatTile("CPU", CLR_ACCENT)
+        self._gpu_tile = StatTile("GPU", CLR_ACCENT2)
+        self._ram_tile = StatTile("RAM", CLR_SUCCESS)
+        self._ssd_tile = StatTile("SSD", QColor(251, 191, 36))
+        self._disk_tile = StatTile("C:\\", QColor(148, 163, 184))
 
-        stats_box.addWidget(self._cpu_row)
-        stats_box.addWidget(self._gpu_row)
-        stats_box.addWidget(self._ram_row)
-        stats_box.addWidget(self._ssd_row)
-        stats_box.addWidget(self._disk_row)
-        body_layout.addLayout(stats_box)
+        stats_grid.addWidget(self._cpu_tile, 0, 0)
+        stats_grid.addWidget(self._gpu_tile, 0, 1)
+        stats_grid.addWidget(self._ram_tile, 0, 2)
+        stats_grid.addWidget(self._ssd_tile, 0, 3)
+        stats_grid.addWidget(self._disk_tile, 0, 4)
+
+        stats_widget = QWidget()
+        stats_widget.setLayout(stats_grid)
+        body_layout.addWidget(stats_widget)
 
         # ── Quick chat input ──────────────────────────────────────────────────
         chat_row = QHBoxLayout()
@@ -557,35 +551,54 @@ class AriaOverlay(QWidget):
         self._date_label.setText(now.strftime("%a %d %b %Y").upper())
 
         cpu = psutil.cpu_percent(interval=None)
-        self._cpu_row.set_value(cpu, f"{cpu:4.0f}%", min_value=0.0, max_value=100.0)
+        self._cpu_tile.set_value(cpu, f"{cpu:0.0f}%")
 
         ram = psutil.virtual_memory().percent
-        self._ram_row.set_value(ram, f"{ram:4.0f}%", min_value=0.0, max_value=100.0)
+        self._ram_tile.set_value(ram, f"{ram:0.0f}%")
 
         gpu = self._get_gpu_load()
         if gpu is None:
-            self._gpu_row.set_value(None, "N/A", min_value=0.0, max_value=100.0)
-        else:
-            self._gpu_row.set_value(gpu, f"{gpu:4.0f}%", min_value=0.0, max_value=100.0)
+            gpu = 0.0
+        self._gpu_tile.set_value(gpu, f"{gpu:0.0f}%")
 
         ssd_speed = self._get_disk_speed_mb()
-        self._ssd_row.set_value(ssd_speed, f"{ssd_speed:4.0f} MB/s", min_value=0.0, max_value=1000.0)
+        ssd_percent = min(100.0, max(0.0, (ssd_speed / 1000.0) * 100.0))
+        self._ssd_tile.set_value(ssd_percent, f"{ssd_speed:0.0f} MB/s")
 
         try:
             usage = psutil.disk_usage("C:\\")
             free_pct = (usage.free / max(1, usage.total)) * 100.0
-            self._disk_row.set_value(free_pct, f"{free_pct:4.0f}%", min_value=0.0, max_value=100.0)
+            self._disk_tile.set_value(free_pct, f"{free_pct:0.0f}% free")
         except Exception:
-            self._disk_row.set_value(None, "N/A", min_value=0.0, max_value=100.0)
+            self._disk_tile.set_value(0.0, "0% free")
 
     def _get_gpu_load(self) -> Optional[float]:
         if GPUtil is None:
-            return None
+            return self._get_nvml_load()
         try:
             gpus = GPUtil.getGPUs()
             if not gpus:
-                return None
+                return self._get_nvml_load()
             return max(0.0, min(100.0, gpus[0].load * 100.0))
+        except Exception:
+            return self._get_nvml_load()
+
+    def _init_nvml(self) -> None:
+        if pynvml is None:
+            return
+        try:
+            pynvml.nvmlInit()
+            self._nvml_ready = True
+        except Exception:
+            self._nvml_ready = False
+
+    def _get_nvml_load(self) -> Optional[float]:
+        if pynvml is None or not self._nvml_ready:
+            return None
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            return max(0.0, min(100.0, float(util.gpu)))
         except Exception:
             return None
 
@@ -597,9 +610,12 @@ class AriaOverlay(QWidget):
                 self._last_disk_io = io
                 self._last_disk_ts = now
                 return 0.0
+            last_io = self._last_disk_io
+            if last_io is None:
+                return 0.0
             dt = max(1e-6, now - self._last_disk_ts)
-            d_read = io.read_bytes - self._last_disk_io.read_bytes
-            d_write = io.write_bytes - self._last_disk_io.write_bytes
+            d_read = io.read_bytes - last_io.read_bytes
+            d_write = io.write_bytes - last_io.write_bytes
             self._last_disk_io = io
             self._last_disk_ts = now
             return max(0.0, (d_read + d_write) / dt / (1024 * 1024))
