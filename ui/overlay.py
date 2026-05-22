@@ -4,6 +4,8 @@ Semi-transparent floating panel: task name, mic status, gesture toggle, quick ch
 """
 
 import sys
+import json
+import subprocess
 import time
 from datetime import datetime
 from typing import Optional
@@ -12,7 +14,7 @@ import psutil
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QGraphicsDropShadowEffect,
-    QFrame, QSizeGrip
+    QFrame, QSizeGrip, QMenu
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve,
@@ -261,6 +263,7 @@ class AriaOverlay(QWidget):
     command_submitted = pyqtSignal(str)
     gesture_toggled   = pyqtSignal(bool)
     mic_toggled       = pyqtSignal(bool)
+    model_selected     = pyqtSignal(str)
 
     # Public state
     MIC_IDLE      = "IDLE"
@@ -278,10 +281,13 @@ class AriaOverlay(QWidget):
         self._last_disk_io  = None
         self._last_disk_ts  = None
         self._nvml_ready    = False
+        self._selected_model = self._get_default_model()
 
         self._init_window()
         self._build_ui()
         self._apply_styles()
+
+        self._sync_model_button()
 
         # Blink timer for processing state
         self._blink_timer = QTimer(self)
@@ -460,6 +466,15 @@ class AriaOverlay(QWidget):
         self._chat_input.setFixedHeight(28)
         self._chat_input.returnPressed.connect(self._on_submit)
 
+        self._model_btn = QPushButton("MODEL")
+        self._model_btn.setFixedSize(52, 28)
+        self._model_btn.setToolTip("Select Ollama model")
+        self._model_btn.setStyleSheet(
+            "background: rgba(30,45,69,80); border: 1px solid rgba(30,45,69,180);"
+            "border-radius:6px; color:#94a3b8; font-size:9px; letter-spacing:1px;"
+        )
+        self._model_btn.clicked.connect(self._open_model_menu)
+
         send_btn = QPushButton("↵")
         send_btn.setFixedSize(28, 28)
         send_btn.setStyleSheet(
@@ -469,6 +484,7 @@ class AriaOverlay(QWidget):
         send_btn.clicked.connect(self._on_submit)
 
         chat_row.addWidget(self._chat_input)
+        chat_row.addWidget(self._model_btn)
         chat_row.addWidget(send_btn)
         body_layout.addLayout(chat_row)
 
@@ -737,13 +753,86 @@ class AriaOverlay(QWidget):
         color = CLR_ACCENT if self._blink_phase else CLR_MUTED
         self._mic_dot.setColor(color)
 
+    # ── Model selection ─────────────────────────────────────────────────────
 
-# ── Standalone demo ───────────────────────────────────────────────────────────
+    def _open_model_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: rgba(13,17,32,235); color:#e2e8f0;"
+            " border:1px solid rgba(0,229,255,60); }"
+            "QMenu::item:selected { background: rgba(0,229,255,30); }"
+        )
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    w = AriaOverlay()
-    w.show()
-    w.set_task("Drafting weekly report")
-    w.set_mic_state(AriaOverlay.MIC_LISTENING)
-    sys.exit(app.exec())
+        models = self._get_ollama_models()
+        if self._selected_model and self._selected_model not in models:
+            models = [self._selected_model] + models
+        if not models:
+            action = menu.addAction("No Ollama models found")
+            action.setEnabled(False)
+        else:
+            for name in models:
+                label = name
+                if name == self._selected_model:
+                    label = f"✓ {name}"
+                action = menu.addAction(label)
+                action.triggered.connect(lambda _=False, n=name: self._set_model(n))
+
+        menu.exec(self._model_btn.mapToGlobal(self._model_btn.rect().bottomLeft()))
+
+    def _set_model(self, name: str):
+        self._selected_model = name
+        self._sync_model_button()
+        self.model_selected.emit(name)
+
+    def _sync_model_button(self) -> None:
+        short = (self._selected_model or "MODEL").split(":")[0].upper()[:6]
+        self._model_btn.setText(short)
+
+    def _get_default_model(self) -> str:
+        try:
+            from config.settings import get as get_setting
+            return str(get_setting("llm.model", ""))
+        except Exception:
+            return ""
+
+    def _get_ollama_models(self) -> list[str]:
+        try:
+            result = subprocess.run(
+                ["ollama", "list", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                payload = json.loads(result.stdout or "{}").get("models", [])
+                models = [m.get("name", "") for m in payload if m.get("name")]
+                if models:
+                    return models
+        except Exception:
+            pass
+
+        try:
+            result = subprocess.run(
+                ["ollama", "list"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+            if result.returncode != 0:
+                return []
+            lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            if len(lines) <= 1:
+                return []
+            models: list[str] = []
+            for line in lines[1:]:
+                name = line.split()[0]
+                if name:
+                    models.append(name)
+            return models
+        except Exception:
+            return []
+
+
+ 

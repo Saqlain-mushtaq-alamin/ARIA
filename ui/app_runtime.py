@@ -31,6 +31,7 @@ from ui.tray_icon import AriaTrayIcon
 from voice.stt import listen_and_transcribe
 from voice.tts import speak
 from voice.wake_word import start_wake_word_listener
+from config.settings import set_value as set_setting
 
 
 class _UiSignals(QObject):
@@ -230,6 +231,7 @@ class AriaDesktopUi:
     def _wire_signals(self) -> None:
         # UI → core
         self.overlay.command_submitted.connect(lambda t: self._handle_text(t, source="overlay"))
+        self.overlay.model_selected.connect(self._on_model_selected)
         self.chat.message_sent.connect(lambda t: self._handle_text(t, source="chat"))
 
         self.overlay.mic_toggled.connect(self._on_voice_toggle)
@@ -259,6 +261,15 @@ class AriaDesktopUi:
         self._signals.notification.connect(self.tray.show_notification)
         self._signals.refresh_tasks.connect(self._refresh_task_views)
         self._signals.scheduler_reload.connect(self._reload_scheduler_from_tracker)
+
+    def _on_model_selected(self, model_name: str) -> None:
+        if not model_name:
+            return
+        try:
+            set_setting("llm.model", model_name)
+            self._signals.notification.emit("ARIA", f"Model set to {model_name}")
+        except Exception as exc:
+            self._signals.notification.emit("ARIA", f"Model update failed: {exc}")
 
     def _start_screen_reader(self) -> None:
         try:

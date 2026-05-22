@@ -1,6 +1,6 @@
 {
   "llm": {
-    "model": "llama3",
+    "model": "gemma3:27b",
     "vision_model": "llava:7b",
     "temperature": 0.7,
     "ollama_url": "http://localhost:11434"
@@ -107,7 +107,7 @@
   },
   "meta": {
     "version": "2.0",
-    "last_modified": "2026-05-17T20:46:40.666641+00:00",
-    "last_modified_by": "system"
+    "last_modified": "2026-05-22T17:31:13.635696+00:00",
+    "last_modified_by": "user"
   }
 }
