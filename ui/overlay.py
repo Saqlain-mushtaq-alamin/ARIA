@@ -264,6 +264,7 @@ class AriaOverlay(QWidget):
     gesture_toggled   = pyqtSignal(bool)
     mic_toggled       = pyqtSignal(bool)
     model_selected     = pyqtSignal(str)
+    pause_requested    = pyqtSignal()
 
     # Public state
     MIC_IDLE      = "IDLE"
@@ -282,6 +283,7 @@ class AriaOverlay(QWidget):
         self._last_disk_ts  = None
         self._nvml_ready    = False
         self._selected_model = self._get_default_model()
+        self._pause_visible = False
 
         self._init_window()
         self._build_ui()
@@ -466,6 +468,16 @@ class AriaOverlay(QWidget):
         self._chat_input.setFixedHeight(28)
         self._chat_input.returnPressed.connect(self._on_submit)
 
+        self._pause_btn = QPushButton("⏸")
+        self._pause_btn.setFixedSize(28, 28)
+        self._pause_btn.setToolTip("Pause current response")
+        self._pause_btn.setStyleSheet(
+            "background: rgba(239,68,68,20); border: 1px solid rgba(239,68,68,120);"
+            "border-radius:6px; color:#ef4444; font-size:12px;"
+        )
+        self._pause_btn.clicked.connect(self._on_pause)
+        self._pause_btn.setVisible(False)
+
         self._model_btn = QPushButton("MODEL")
         self._model_btn.setFixedSize(52, 28)
         self._model_btn.setToolTip("Select Ollama model")
@@ -484,6 +496,7 @@ class AriaOverlay(QWidget):
         send_btn.clicked.connect(self._on_submit)
 
         chat_row.addWidget(self._chat_input)
+        chat_row.addWidget(self._pause_btn)
         chat_row.addWidget(self._model_btn)
         chat_row.addWidget(send_btn)
         body_layout.addLayout(chat_row)
@@ -752,6 +765,27 @@ class AriaOverlay(QWidget):
         self._blink_phase = not self._blink_phase
         color = CLR_ACCENT if self._blink_phase else CLR_MUTED
         self._mic_dot.setColor(color)
+
+    def set_pause_visible(self, visible: bool) -> None:
+        self._pause_visible = bool(visible)
+        self._pause_btn.setVisible(self._pause_visible)
+
+    def set_pause_busy(self, busy: bool) -> None:
+        if busy:
+            self._pause_btn.setEnabled(False)
+            self._pause_btn.setStyleSheet(
+                "background: rgba(239,68,68,35); border: 1px solid rgba(239,68,68,200);"
+                "border-radius:6px; color:#ef4444; font-size:12px;"
+            )
+        else:
+            self._pause_btn.setEnabled(True)
+            self._pause_btn.setStyleSheet(
+                "background: rgba(239,68,68,20); border: 1px solid rgba(239,68,68,120);"
+                "border-radius:6px; color:#ef4444; font-size:12px;"
+            )
+
+    def _on_pause(self) -> None:
+        self.pause_requested.emit()
 
     # ── Model selection ─────────────────────────────────────────────────────
 

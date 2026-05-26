@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Generator
@@ -97,6 +98,21 @@ except Exception:
     def llm_busy_context() -> Any:                   # type: ignore[misc]
         from contextlib import nullcontext
         return nullcontext()
+
+
+_CANCEL_EVENT = threading.Event()
+
+
+def request_cancel() -> None:
+    _CANCEL_EVENT.set()
+
+
+def clear_cancel() -> None:
+    _CANCEL_EVENT.clear()
+
+
+def cancel_requested() -> bool:
+    return _CANCEL_EVENT.is_set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -317,10 +333,16 @@ def _generate_step_content(step: dict) -> dict:
     if not params.get("generate"):
         return step
 
+    if cancel_requested():
+        return step
+
     step_intent = step.get("intent", "")
     prompt_text = str(params.get("prompt") or params.get("text") or "Write the requested content.")
     with llm_busy_context():
         generated = generate_text(_build_context_prompt(prompt_text)).strip()
+
+    if cancel_requested():
+        return step
 
     # Clone the step so we don't mutate the original
     new_params = dict(params)
@@ -776,6 +798,7 @@ def process_text_stream(
     Yields:
         Narration lines (strings) — one per event.
     """
+    clear_cancel()
     if not user_text or not user_text.strip():
         yield "No input received."
         return
@@ -789,9 +812,15 @@ def process_text_stream(
     # Fast heuristic check first (no LLM call needed for obvious greetings)
     try:
         if is_conversational(normalized_text):
+            if cancel_requested():
+                yield "Canceled."
+                return
             augmented = _build_context_prompt(user_text)
             with llm_busy_context():
                 reply = generate_text(augmented).strip()
+            if cancel_requested():
+                yield "Canceled."
+                return
             yield reply or "I'm not sure how to respond to that."
             # Subconscious layer: detect latent concerns
             try:
@@ -831,8 +860,14 @@ def process_text_stream(
         if classified.get("intent") in {"conversational", "answer_question"}:
             prompt = classified.get("parameters", {}).get("prompt") or user_text
             augmented = _build_context_prompt(prompt)
+            if cancel_requested():
+                yield "Canceled."
+                return
             with llm_busy_context():
                 _reply = generate_text(augmented).strip()
+            if cancel_requested():
+                yield "Canceled."
+                return
             yield _reply or "I'm not sure how to respond."
             # Subconscious layer: detect latent concerns
             try:
@@ -880,8 +915,14 @@ def process_text_stream(
     if intent in {"answer_question", "type_generated_text"}:
         prompt = (payload.get("parameters") or {}).get("prompt") or user_text
         augmented = _build_context_prompt(prompt)
+        if cancel_requested():
+            yield "Canceled."
+            return
         with llm_busy_context():
             generated = generate_text(augmented).strip()
+        if cancel_requested():
+            yield "Canceled."
+            return
         if not generated:
             yield "No response generated."
             return
@@ -909,15 +950,25 @@ def process_text_stream(
         results_all: list[str] = []
 
         for i, raw_step in enumerate(steps, 1):
+            if cancel_requested():
+                yield "Canceled."
+                return
             step_intent = str(raw_step.get("intent", "")).strip().lower()
             step_params = raw_step.get("parameters") or {}
 
             # Generate content if this step needs LLM-produced text
             step = _generate_step_content(raw_step)
             step_params = step.get("parameters") or {}
+            if cancel_requested():
+                yield "Canceled."
+                return
 
             label = _label_for_step(step_intent, step_params)
             yield _step_header(i, total, label)
+
+            if cancel_requested():
+                yield "Canceled."
+                return
 
             # Safety check per step
             if is_blocked(step):
@@ -1089,10 +1140,17 @@ def process_text_stream(
     label = _label_for_step(intent, parameters)
     yield _step_header(1, 1, label)
 
+    if cancel_requested():
+        yield "Canceled."
+        return
+
     try:
         result = dispatch_intent({"intent": intent, "parameters": parameters,
                                   **{k: v for k, v in payload.items()
                                      if k not in {"intent", "parameters"}}})
+        if cancel_requested():
+            yield "Canceled."
+            return
         result_str = result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False)
         try:
             assessment = assess_risk(payload)

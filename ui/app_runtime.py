@@ -21,7 +21,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from core.agent import process_text
+from core.agent import process_text, request_cancel
 from memory.conversation_log import log_interaction
 from scheduler import tracker
 from ui.chat_window import AriaChatWindow
@@ -232,6 +232,7 @@ class AriaDesktopUi:
         # UI → core
         self.overlay.command_submitted.connect(lambda t: self._handle_text(t, source="overlay"))
         self.overlay.model_selected.connect(self._on_model_selected)
+        self.overlay.pause_requested.connect(self._on_pause_requested)
         self.chat.message_sent.connect(lambda t: self._handle_text(t, source="chat"))
 
         self.overlay.mic_toggled.connect(self._on_voice_toggle)
@@ -270,6 +271,13 @@ class AriaDesktopUi:
             self._signals.notification.emit("ARIA", f"Model set to {model_name}")
         except Exception as exc:
             self._signals.notification.emit("ARIA", f"Model update failed: {exc}")
+
+    def _on_pause_requested(self) -> None:
+        request_cancel()
+        try:
+            self.overlay.set_pause_busy(True)
+        except Exception:
+            pass
 
     def _start_screen_reader(self) -> None:
         try:
@@ -351,6 +359,8 @@ class AriaDesktopUi:
 
         self._signals.tray_state.emit("processing")
         self._signals.overlay_mic_state.emit(AriaOverlay.MIC_PROCESSING)
+        self.overlay.set_pause_visible(True)
+        self.overlay.set_pause_busy(False)
 
         # Add the user's message immediately for non-chat sources.
         # (The chat window already renders the user's bubble before emitting
@@ -371,6 +381,11 @@ class AriaDesktopUi:
             self._signals.chat_add.emit("aria", response)
             self._signals.tray_state.emit("idle" if self.voice.is_enabled() else "muted")
             self._signals.overlay_mic_state.emit(AriaOverlay.MIC_IDLE)
+            try:
+                self.overlay.set_pause_visible(False)
+                self.overlay.set_pause_busy(False)
+            except Exception:
+                pass
             self._signals.refresh_tasks.emit()
 
             try:
