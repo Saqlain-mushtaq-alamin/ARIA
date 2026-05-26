@@ -5,10 +5,11 @@ Semi-transparent floating panel: task name, mic status, gesture toggle, quick ch
 
 import sys
 import json
+import math
 import subprocess
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 
 import psutil
 from PyQt6.QtWidgets import (
@@ -175,6 +176,67 @@ class CornerAccent(QWidget):
             p.drawLine(0, 0, 0, s); p.drawLine(0, s, s, s)
         elif self.corner == "br":
             p.drawLine(s, 0, s, s); p.drawLine(0, s, s, s)
+
+
+class WaveformWidget(QWidget):
+    """Futuristic voice waveform indicator."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0.0
+        self._mode = "idle"
+        self._color = CLR_MUTED
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(50)
+        self.setFixedSize(78, 16)
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode
+        if mode == "listening":
+            self._color = CLR_SUCCESS
+        elif mode == "processing":
+            self._color = CLR_ACCENT
+        else:
+            self._color = CLR_MUTED
+        self.update()
+
+    def _tick(self) -> None:
+        self._phase += 0.35
+        if self._phase > 1000:
+            self._phase = 0.0
+        self.update()
+
+    def paintEvent(self, a0):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        h = self.height()
+
+        bar_count = 10
+        gap = 3
+        bar_w = max(1, (w - (bar_count - 1) * gap) // bar_count)
+        mid = h / 2
+
+        base_amp = 3 if self._mode == "idle" else 6
+        pulse = 4 if self._mode == "processing" else 2
+        glow = QColor(self._color)
+        glow.setAlpha(60)
+
+        for i in range(bar_count):
+            x = i * (bar_w + gap)
+            wave = math.sin(self._phase + i * 0.6)
+            amp = base_amp + pulse * (0.5 + 0.5 * wave)
+            if self._mode == "idle":
+                amp *= 0.6
+            y = mid - amp / 2
+
+            p.setBrush(QBrush(glow))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(x, int(y) - 1, bar_w, int(amp) + 2, 2, 2)
+
+            p.setBrush(QBrush(self._color))
+            p.drawRoundedRect(x, int(y), bar_w, int(amp), 2, 2)
 
 
 class PieGauge(QWidget):
@@ -393,10 +455,8 @@ class AriaOverlay(QWidget):
 
         # Mic status
         self._mic_dot    = PulsingDot(CLR_MUTED)
-        self._mic_label  = QLabel("MIC · IDLE")
-        self._mic_label.setStyleSheet(
-            "font-size: 9px; letter-spacing: 2px; color: #64748b;"
-        )
+        self._mic_wave = WaveformWidget()
+        self._mic_wave.set_mode("idle")
         mic_btn = QPushButton("⏺")
         mic_btn.setToolTip("Toggle mute")
         mic_btn.setFixedSize(22, 18)
@@ -413,7 +473,7 @@ class AriaOverlay(QWidget):
         self._gesture_btn.setFixedHeight(20)
 
         status_row.addWidget(self._mic_dot)
-        status_row.addWidget(self._mic_label)
+        status_row.addWidget(self._mic_wave)
         status_row.addWidget(mic_btn)
         status_row.addStretch()
         status_row.addWidget(self._gesture_btn)
@@ -468,7 +528,7 @@ class AriaOverlay(QWidget):
         self._chat_input.setFixedHeight(28)
         self._chat_input.returnPressed.connect(self._on_submit)
 
-        self._pause_btn = QPushButton("⏸")
+        self._pause_btn: QPushButton = QPushButton("⏸")
         self._pause_btn.setFixedSize(28, 28)
         self._pause_btn.setToolTip("Pause current response")
         self._pause_btn.setStyleSheet(
@@ -478,7 +538,7 @@ class AriaOverlay(QWidget):
         self._pause_btn.clicked.connect(self._on_pause)
         self._pause_btn.setVisible(False)
 
-        self._model_btn = QPushButton("MODEL")
+        self._model_btn: QPushButton = QPushButton("MODEL")
         self._model_btn.setFixedSize(52, 28)
         self._model_btn.setToolTip("Select Ollama model")
         self._model_btn.setStyleSheet(
@@ -634,6 +694,8 @@ class AriaOverlay(QWidget):
     def _get_disk_speed_mb(self) -> float:
         try:
             io = psutil.disk_io_counters()
+            if io is None:
+                return 0.0
             now = time.monotonic()
             if self._last_disk_io is None or self._last_disk_ts is None:
                 self._last_disk_io = io
@@ -642,9 +704,10 @@ class AriaOverlay(QWidget):
             last_io = self._last_disk_io
             if last_io is None:
                 return 0.0
+            last_io = cast(object, last_io)
             dt = max(1e-6, now - self._last_disk_ts)
-            d_read = io.read_bytes - last_io.read_bytes
-            d_write = io.write_bytes - last_io.write_bytes
+            d_read = io.read_bytes - cast(int, getattr(last_io, "read_bytes", 0))
+            d_write = io.write_bytes - cast(int, getattr(last_io, "write_bytes", 0))
             self._last_disk_io = io
             self._last_disk_ts = now
             return max(0.0, (d_read + d_write) / dt / (1024 * 1024))
@@ -682,24 +745,15 @@ class AriaOverlay(QWidget):
         self._mic_state = state
         if state == self.MIC_LISTENING:
             self._mic_dot.setColor(CLR_SUCCESS)
-            self._mic_label.setText("MIC · LISTENING")
-            self._mic_label.setStyleSheet(
-                "font-size:9px; letter-spacing:2px; color:#10b981;"
-            )
+            self._mic_wave.set_mode("listening")
             self._blink_timer.stop()
         elif state == self.MIC_PROCESSING:
             self._mic_dot.setColor(CLR_ACCENT)
-            self._mic_label.setText("MIC · PROCESSING")
-            self._mic_label.setStyleSheet(
-                "font-size:9px; letter-spacing:2px; color:#00e5ff;"
-            )
+            self._mic_wave.set_mode("processing")
             self._blink_timer.start(450)
         else:
             self._mic_dot.setColor(CLR_MUTED)
-            self._mic_label.setText("MIC · IDLE")
-            self._mic_label.setStyleSheet(
-                "font-size:9px; letter-spacing:2px; color:#64748b;"
-            )
+            self._mic_wave.set_mode("idle")
             self._blink_timer.stop()
 
     def set_opacity(self, value: float):
@@ -711,10 +765,7 @@ class AriaOverlay(QWidget):
         self._mic_muted = not enabled
         if not enabled:
             self._mic_dot.setColor(CLR_DANGER)
-            self._mic_label.setText("MIC · MUTED")
-            self._mic_label.setStyleSheet(
-                "font-size:9px; letter-spacing:2px; color:#ef4444;"
-            )
+            self._mic_wave.set_mode("idle")
             self._blink_timer.stop()
         else:
             # Restore visual state based on current mic state.
@@ -750,10 +801,7 @@ class AriaOverlay(QWidget):
         self.mic_toggled.emit(not self._mic_muted)
         if self._mic_muted:
             self._mic_dot.setColor(CLR_DANGER)
-            self._mic_label.setText("MIC · MUTED")
-            self._mic_label.setStyleSheet(
-                "font-size:9px; letter-spacing:2px; color:#ef4444;"
-            )
+            self._mic_wave.set_mode("idle")
 
     def _toggle_collapse(self):
         self._collapsed = not self._collapsed
@@ -802,14 +850,16 @@ class AriaOverlay(QWidget):
             models = [self._selected_model] + models
         if not models:
             action = menu.addAction("No Ollama models found")
-            action.setEnabled(False)
+            if action is not None:
+                action.setEnabled(False)
         else:
             for name in models:
                 label = name
                 if name == self._selected_model:
                     label = f"✓ {name}"
                 action = menu.addAction(label)
-                action.triggered.connect(lambda _=False, n=name: self._set_model(n))
+                if action is not None:
+                    action.triggered.connect(lambda _=False, n=name: self._set_model(n))
 
         menu.exec(self._model_btn.mapToGlobal(self._model_btn.rect().bottomLeft()))
 

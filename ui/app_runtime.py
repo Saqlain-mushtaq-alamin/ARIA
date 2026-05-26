@@ -41,6 +41,8 @@ class _UiSignals(QObject):
     overlay_voice_enabled = pyqtSignal(bool)
     overlay_gesture_enabled = pyqtSignal(bool)
     overlay_task_text = pyqtSignal(str)
+    overlay_pause_visible = pyqtSignal(bool)
+    overlay_pause_busy = pyqtSignal(bool)
     notification = pyqtSignal(str, str)  # title, message
     refresh_tasks = pyqtSignal()
     scheduler_reload = pyqtSignal()
@@ -132,6 +134,8 @@ class VoiceController:
             # Wake word fired; capture a command session.
             self._signals.tray_state.emit("listening")
             self._signals.overlay_mic_state.emit(AriaOverlay.MIC_LISTENING)
+            self._signals.overlay_pause_visible.emit(False)
+            self._signals.overlay_pause_busy.emit(False)
 
             session_seconds = float(os.getenv("VOICE_SESSION_SECONDS", "25"))
             max_empty = int(os.getenv("VOICE_SESSION_MAX_EMPTY", "2"))
@@ -165,6 +169,8 @@ class VoiceController:
                 # Process command synchronously in this voice thread (already background)
                 self._signals.tray_state.emit("processing")
                 self._signals.overlay_mic_state.emit(AriaOverlay.MIC_PROCESSING)
+                self._signals.overlay_pause_visible.emit(True)
+                self._signals.overlay_pause_busy.emit(False)
 
                 try:
                     response = process_text(text)
@@ -174,6 +180,8 @@ class VoiceController:
                 self._signals.chat_add.emit("user", text)
                 self._signals.chat_add.emit("aria", response)
                 self._signals.refresh_tasks.emit()
+                self._signals.overlay_pause_visible.emit(False)
+                self._signals.overlay_pause_busy.emit(False)
 
                 try:
                     log_interaction(text, response, metadata={"source": "voice"})
@@ -259,6 +267,8 @@ class AriaDesktopUi:
         self._signals.overlay_voice_enabled.connect(self.overlay.set_voice_enabled)
         self._signals.overlay_gesture_enabled.connect(self.overlay.set_gesture_enabled)
         self._signals.overlay_task_text.connect(self.overlay.set_task)
+        self._signals.overlay_pause_visible.connect(self.overlay.set_pause_visible)
+        self._signals.overlay_pause_busy.connect(self.overlay.set_pause_busy)
         self._signals.notification.connect(self.tray.show_notification)
         self._signals.refresh_tasks.connect(self._refresh_task_views)
         self._signals.scheduler_reload.connect(self._reload_scheduler_from_tracker)
