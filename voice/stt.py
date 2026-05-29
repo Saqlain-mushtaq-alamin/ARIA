@@ -193,6 +193,10 @@ def listen_and_transcribe(
             language=language,
             initial_prompt=prompt,
         )
+        if raw:
+            raw_l = raw.strip().lower()
+            if raw_l.startswith("you are a desktop assistant") or "transcribe short commands" in raw_l:
+                return ""
         result = _postprocess_command(raw)
         if debug and result:
             print(f"[stt] heard: {result!r}")
