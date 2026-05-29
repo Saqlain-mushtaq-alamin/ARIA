@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve,
-    pyqtSignal, QPoint, QRect, QSize, QThread, QRectF
+    pyqtSignal, QPoint, QRect, QSize, QThread, QRectF, QPointF
 )
 from PyQt6.QtCore import pyqtProperty  # type: ignore[attr-defined]
 from PyQt6.QtGui import (
@@ -242,7 +242,7 @@ class ArcReactor(QWidget):
                               int(cy + hex_r * math.sin(a))))
         pen2 = QPen(QColor(100, 200, 255, int(140 + 60 * pulse)), 1)
         p.setPen(pen2); p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPolygon(QPolygonF([p2.__class__(float(pt.x()), float(pt.y())) for pt in pts]))
+        p.drawPolygon(QPolygonF([QPointF(float(pt.x()), float(pt.y())) for pt in pts]))
 
         # Center core
         core_alpha = int(180 + 60 * pulse)
@@ -397,7 +397,7 @@ class HexGrid(QWidget):
                     a = i * math.pi / 3
                     pts.append(QPoint(int(cx + hex_r*0.85*math.cos(a)),
                                       int(cy + hex_r*0.85*math.sin(a))))
-                p.drawPolygon(QPolygonF([p2.__class__(float(pt.x()), float(pt.y())) for pt in pts]))
+                p.drawPolygon(QPolygonF([QPointF(float(pt.x()), float(pt.y())) for pt in pts]))
 
 
 class CornerBracket(QWidget):
