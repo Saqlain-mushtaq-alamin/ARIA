@@ -243,11 +243,49 @@ def _divider(total: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Memory + emotion context injection
+# Short-term context tracker (last interaction memory for follow-ups)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LAST_INTERACTION: dict[str, Any] = {
+    "user_text": "",
+    "intent": "",
+    "parameters": {},
+    "response": "",
+    "timestamp": "",
+}
+
+
+def _update_last_interaction(user_text: str, intent: str = "",
+                              parameters: dict | None = None,
+                              response: str = "") -> None:
+    """Track the last interaction for follow-up detection."""
+    _LAST_INTERACTION["user_text"] = user_text
+    _LAST_INTERACTION["intent"] = intent
+    _LAST_INTERACTION["parameters"] = parameters or {}
+    _LAST_INTERACTION["response"] = response
+    _LAST_INTERACTION["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+
+def _is_followup(text: str) -> bool:
+    """Detect if the user's input is a follow-up to the previous interaction."""
+    lower = text.strip().lower()
+    followup_phrases = {
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
+        "do it", "proceed", "confirm", "go", "please", "yes please",
+        "you can", "you can do that", "that's fine", "that works",
+        "alright", "right", "correct", "exactly", "do that",
+        "no", "nah", "nope", "don't", "cancel", "stop", "never mind",
+        "what", "what do you mean", "huh", "explain",
+    }
+    return lower in followup_phrases or len(lower.split()) <= 3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory + emotion + conversation context injection
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_context_prompt(prompt: str) -> str:
-    """Inject memory and emotion state into a prompt before sending to LLM."""
+    """Inject memory, emotion state, and conversation history into a prompt."""
     vibe_block = ""
     try:
         vibe_path = os.path.normpath(
@@ -317,7 +355,18 @@ def _build_context_prompt(prompt: str) -> str:
     except Exception:
         pass
 
-    parts = [p for p in [vibe_block, memory_block, screen_block, cognitive_block] if p]
+    # Conversation history (recent turns for context continuity)
+    conversation_block = ""
+    try:
+        from memory.conversation_log import get_full_context_string
+        ctx = get_full_context_string(turns=5)
+        if ctx:
+            conversation_block = ctx
+    except Exception:
+        pass
+
+    parts = [p for p in [conversation_block, vibe_block, memory_block,
+                          screen_block, cognitive_block] if p]
     if not parts:
         return prompt
     return "Context (use only if relevant):\n\n" + "\n\n".join(parts) + f"\n\nUser: {prompt}"
@@ -803,6 +852,27 @@ def process_text_stream(
         yield "No input received."
         return
     normalized_text = _normalize_user_text(user_text)
+
+    # ── Follow-up detection ──────────────────────────────────────────────────
+    # Handle short affirmations/negations that reference the previous interaction
+    if _is_followup(user_text) and _LAST_INTERACTION.get("user_text"):
+        lower = user_text.strip().lower()
+        # Negative follow-ups → cancel
+        if lower in {"no", "nah", "nope", "don't", "cancel", "stop", "never mind"}:
+            yield "Okay, never mind."
+            return
+        # Positive follow-ups → re-execute with context
+        if lower in {"yes", "yeah", "yep", "yup", "sure", "ok", "okay",
+                      "go ahead", "do it", "proceed", "confirm", "go",
+                      "please", "yes please", "you can", "you can do that",
+                      "that's fine", "that works", "alright", "do that"}:
+            last_intent = _LAST_INTERACTION.get("intent", "")
+            last_params = _LAST_INTERACTION.get("parameters", {})
+            if last_intent and last_intent not in {"conversational", "answer_question", "unknown", ""}:
+                # Re-execute the last action with confirmation
+                user_text = _LAST_INTERACTION.get("user_text", user_text)
+                normalized_text = _normalize_user_text(user_text)
+                yield f"Got it — proceeding with: {user_text}"
 
     # ── Optional: inline confirmation prefix (non-interactive UI/voice) ────
     # Supports: "confirm shutdown", "confirm delete file ..." etc.

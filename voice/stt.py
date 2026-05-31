@@ -115,6 +115,11 @@ def _postprocess_command(text: str) -> str:
     if not cleaned:
         return ""
 
+    # ── Garbage / noise detection ──────────────────────────────────────
+    # Reject transcriptions that are clearly not valid commands.
+    if _is_garbage_transcription(cleaned):
+        return ""
+
     lower = cleaned.lower()
 
     # Normalise volume commands.
@@ -155,6 +160,70 @@ def _postprocess_command(text: str) -> str:
                 return f"{verb} {best[0]}"
 
     return lower
+
+
+def _is_garbage_transcription(text: str) -> bool:
+    """Detect garbage/noise transcriptions that should be rejected.
+
+    Whisper sometimes produces nonsensical output from background noise,
+    keyboard clicks, or microphone artifacts. This function catches the most
+    common patterns:
+      - Very short or very long gibberish
+      - High ratio of non-dictionary words
+      - Known noise artifacts (repeated characters, no vowels, etc.)
+    """
+    if not text or len(text) < 2:
+        return True
+
+    lower = text.strip().lower()
+    words = lower.split()
+
+    # Single nonsense word (not a known command verb)
+    command_verbs = {
+        "open", "close", "set", "search", "play", "pause", "stop", "skip",
+        "send", "read", "show", "help", "hey", "hi", "hello", "what",
+        "who", "where", "when", "how", "why", "yes", "no", "ok", "cancel",
+        "confirm", "delete", "create", "save", "type", "write", "move",
+        "copy", "download", "schedule", "turn", "toggle", "shut", "lock",
+        "sleep", "restart", "exit", "quit", "volume", "brightness", "mute",
+    }
+    if len(words) == 1 and words[0] not in command_verbs and len(words[0]) < 3:
+        return True
+
+    # Known noise patterns from Whisper
+    noise_patterns = [
+        r"^\.+$",                          # Just dots
+        r"^\*+$",                          # Just asterisks
+        r"^[\-\.\,\!\?\s]+$",             # Just punctuation
+        r"^(uh|um|hmm|huh|ah|eh)+$",      # Filler sounds
+        r"^(the|a|an|is|it|to|of|in)\s*$", # Lone articles/prepositions
+    ]
+    for pattern in noise_patterns:
+        if re.match(pattern, lower):
+            return True
+
+    # Too many non-English-looking words (high consonant density)
+    def _looks_like_word(w: str) -> bool:
+        """Check if a word looks remotely English (has vowels, reasonable length)."""
+        w = re.sub(r"[^a-z]", "", w.lower())
+        if not w or len(w) < 2:
+            return False
+        vowels = sum(1 for c in w if c in "aeiou")
+        if vowels == 0 and len(w) > 2:
+            return False  # No vowels = not a word (except short abbrevs)
+        return True
+
+    if len(words) >= 3:
+        real_words = sum(1 for w in words if _looks_like_word(w))
+        ratio = real_words / len(words)
+        if ratio < 0.4:
+            return True  # More than 60% gibberish words
+
+    # Whisper echo of system prompt
+    if "desktop assistant" in lower or "transcribe short commands" in lower:
+        return True
+
+    return False
 
 # ---------------------------------------------------------------------------
 # Public API
