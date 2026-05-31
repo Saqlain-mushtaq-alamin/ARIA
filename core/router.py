@@ -97,6 +97,51 @@ def _download(
         strict=bool(strict),
     )
 
+# ── Messenger module (lazy-loaded) ───────────────────────────────────────
+def _send_message(platform: str = "", recipient: str = "", message: str = "",
+                  ask_fn: Optional[Callable] = None, **kw: Any) -> str:
+    from modules.messenger import send_message
+    return send_message(platform=platform, recipient=recipient, message=message,
+                        ask_fn=ask_fn, **kw)
+
+def _read_messages(platform: str = "", limit: int = 10, **kw: Any) -> str:
+    from modules.messenger import read_unread_messages
+    return read_unread_messages(platform=platform, limit=limit, **kw)
+
+# ── Media control module (lazy-loaded) ───────────────────────────────────
+def _media_play_pause(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_play_pause
+    return media_play_pause(app=app, **kw)
+
+def _media_next(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_next
+    return media_next(app=app, **kw)
+
+def _media_prev(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_prev
+    return media_prev(app=app, **kw)
+
+def _media_volume(level: int = 50, app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_volume
+    return media_volume(level=level, app=app, **kw)
+
+def _media_search(query: str = "", app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_search
+    return media_search(query=query, app=app, **kw)
+
+def _media_stop(**kw: Any) -> str:
+    from modules.media_control import media_stop
+    return media_stop(**kw)
+
+# ── Notifier module (lazy-loaded) ────────────────────────────────────────
+def _send_notification(title: str = "ARIA", message: str = "", **kw: Any) -> str:
+    from modules.notifier import send_toast
+    return send_toast(title=title, message=message, **kw)
+
+def _notify_reminder(task: str = "", time_str: str = "", **kw: Any) -> str:
+    from modules.notifier import notify_reminder
+    return notify_reminder(task=task, time_str=time_str, **kw)
+
 _GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
 
 
@@ -569,6 +614,22 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "show_habits":        _show_habits,
     "mark_habit":         _mark_habit,
     "show_profile":       _show_profile,
+
+    # ── Messenger ────────────────────────────────────────────────────────
+    "send_message":       _send_message,
+    "read_messages":      _read_messages,
+
+    # ── Media control ────────────────────────────────────────────────────
+    "media_play_pause":   _media_play_pause,
+    "media_next":         _media_next,
+    "media_prev":         _media_prev,
+    "media_volume":       _media_volume,
+    "media_search":       _media_search,
+    "media_stop":         _media_stop,
+
+    # ── Notifier ─────────────────────────────────────────────────────────
+    "send_notification":  _send_notification,
+    "notify_reminder":    _notify_reminder,
 }
 
 INTENT_ALIASES: Dict[str, str] = {
@@ -689,6 +750,37 @@ INTENT_ALIASES: Dict[str, str] = {
     "log_habit":        "mark_habit",
     "profile":          "show_profile",
     "my_profile":       "show_profile",
+    # Messenger
+    "message":          "send_message",
+    "text_message":     "send_message",
+    "send_text":        "send_message",
+    "send_msg":         "send_message",
+    "read_message":     "read_messages",
+    "check_messages":   "read_messages",
+    "unread_messages":  "read_messages",
+    # Media control
+    "play":             "media_play_pause",
+    "pause":            "media_play_pause",
+    "play_pause":       "media_play_pause",
+    "play_music":       "media_play_pause",
+    "pause_music":      "media_play_pause",
+    "next_track":       "media_next",
+    "skip":             "media_next",
+    "skip_track":       "media_next",
+    "previous_track":   "media_prev",
+    "prev_track":       "media_prev",
+    "media_volume":     "media_volume",
+    "music_volume":     "media_volume",
+    "search_music":     "media_search",
+    "find_song":        "media_search",
+    "play_song":        "media_search",
+    "stop_music":       "media_stop",
+    # Notifier
+    "notify":           "send_notification",
+    "notification":     "send_notification",
+    "toast":            "send_notification",
+    "reminder":         "notify_reminder",
+    "set_reminder":     "notify_reminder",
 }
 
 
@@ -947,6 +1039,50 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
 
     if intent == "mark_habit":
         return handler(habit_name=str(parameters.get("habit_name", "")))
+
+    # ── Messenger intents ────────────────────────────────────────────────────
+    if intent == "send_message":
+        return handler(
+            platform=str(parameters.get("platform", "")),
+            recipient=str(parameters.get("recipient") or parameters.get("contact", "")),
+            message=str(parameters.get("message") or parameters.get("text", "")),
+            ask_fn=payload.get("ask_fn"),
+        )
+
+    if intent == "read_messages":
+        return handler(
+            platform=str(parameters.get("platform", "")),
+            limit=int(parameters.get("limit", 10)),
+        )
+
+    # ── Media control intents ────────────────────────────────────────────────
+    if intent in {"media_play_pause", "media_next", "media_prev", "media_stop"}:
+        return handler(app=str(parameters.get("app", "")))
+
+    if intent == "media_volume":
+        return handler(
+            level=int(parameters.get("level", 50)),
+            app=str(parameters.get("app", "")),
+        )
+
+    if intent == "media_search":
+        return handler(
+            query=str(parameters.get("query") or parameters.get("track", "")),
+            app=str(parameters.get("app", "")),
+        )
+
+    # ── Notifier intents ─────────────────────────────────────────────────────
+    if intent == "send_notification":
+        return handler(
+            title=str(parameters.get("title", "ARIA")),
+            message=str(parameters.get("message", "")),
+        )
+
+    if intent == "notify_reminder":
+        return handler(
+            task=str(parameters.get("task", "")),
+            time_str=str(parameters.get("time", "")),
+        )
 
     # ── Generic fallback: pass parameters as kwargs ─────────────────────────
     return handler(**parameters)
