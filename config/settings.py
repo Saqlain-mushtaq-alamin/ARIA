@@ -149,9 +149,31 @@ _DEFAULTS: Dict[str, Any] = {
         "show_narration": True,               # show step-by-step narration
     },
 
+    # ── Messenger ─────────────────────────────────────────────────────────
+    "messenger": {
+        "enabled": True,                      # on/off toggle
+        "double_confirmation": True,          # HARD RULE — cannot be disabled
+        "default_platform": "whatsapp",       # whatsapp | telegram | messenger
+        "auto_reply_enabled": False,          # chatbot auto-reply mode
+    },
+
+    # ── Media control ─────────────────────────────────────────────────────
+    "media_control": {
+        "enabled": True,                      # on/off toggle
+        "default_player": "spotify",          # spotify | vlc | youtube
+    },
+
+    # ── Notifier ──────────────────────────────────────────────────────────
+    "notifier": {
+        "enabled": True,                      # on/off toggle
+        "read_aloud": True,                   # speak notifications via TTS
+        "smart_suggestions": True,            # suggest actions for notifications
+        "listener_enabled": False,            # background notification listener
+    },
+
     # ── Meta ──────────────────────────────────────────────────────────────
     "meta": {
-        "version": "2.0",
+        "version": "2.1",
         "last_modified": "",
         "last_modified_by": "system",
     },
@@ -376,6 +398,9 @@ def _format_section(name: str, data: dict) -> str:
         "voice": "🎤",
         "security": "🔒",
         "ui": "🎨",
+        "messenger": "💬",
+        "media_control": "🎵",
+        "notifier": "🔔",
     }
     icon = section_icons.get(name, "📌")
     title = name.replace("_", " ").title()
@@ -414,6 +439,9 @@ def _get_important_keys(section: str) -> List[str]:
         "voice": ["mode", "stt_model"],
         "security": ["require_confirmation_for_dangerous", "sensitive_data_masking"],
         "ui": ["theme"],
+        "messenger": ["default_platform", "auto_reply_enabled"],
+        "media_control": ["default_player"],
+        "notifier": ["read_aloud", "smart_suggestions"],
     }.get(section, [])
 
 

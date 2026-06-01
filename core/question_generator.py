@@ -468,6 +468,8 @@ ENRICHMENT_ELIGIBLE: frozenset = frozenset({
     "screenshot",
     "extract_text",
     "get_weather",
+    "read_messages",
+    "media_search",
 })
 
 
