@@ -199,6 +199,19 @@ _INTENT_LABELS: dict[str, str] = {
     "show_habits":        "Showing your habits",
     "mark_habit":         "Logging habit: {habit_name}",
     "show_profile":       "Showing your profile",
+    # Messenger
+    "send_message":       "Sending message to {recipient} via {platform}",
+    "read_messages":      "Reading unread messages from {platform}",
+    # Media control
+    "media_play_pause":   "Toggling play/pause",
+    "media_next":         "Skipping to next track",
+    "media_prev":         "Going to previous track",
+    "media_volume":       "Setting media volume to {level}%",
+    "media_search":       "Searching for: {query}",
+    "media_stop":         "Stopping playback",
+    # Notifier
+    "send_notification":  "Sending notification: {title}",
+    "notify_reminder":    "Setting reminder: {task}",
 }
 
 
@@ -1234,8 +1247,22 @@ def process_text_stream(
             )
         except Exception:
             pass
+        _update_last_interaction(user_text, intent, parameters, result_str)
         yield _step_success(1, 1, label, result_str)
     except Exception as exc:
+        error_msg = str(exc)
+        # ── Graceful handling for common errors ──────────────────────────
+        # App not found: don't show scary error, give helpful message
+        if intent in {"open_app", "close_window"} and "not found" in error_msg.lower():
+            app_name = parameters.get("app_name", "")
+            yield f"I couldn't find '{app_name}' on your system. Check the name and try again."
+            _update_last_interaction(user_text, intent, parameters, error_msg)
+            return
+        # Permission denied: suggest running as admin
+        if "access" in error_msg.lower() and "denied" in error_msg.lower():
+            yield f"⚠️  Permission denied. This action may require administrator privileges."
+            _update_last_interaction(user_text, intent, parameters, error_msg)
+            return
         try:
             assessment = assess_risk(payload)
             log_action(
@@ -1243,12 +1270,13 @@ def process_text_stream(
                 parameters=parameters,
                 risk_level=assessment.level,
                 outcome=OUTCOME_ERROR,
-                result_summary=str(exc),
+                result_summary=error_msg,
                 user_input=user_text,
             )
         except Exception:
             pass
-        yield _step_error(1, 1, label, str(exc))
+        _update_last_interaction(user_text, intent, parameters, error_msg)
+        yield _step_error(1, 1, label, error_msg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

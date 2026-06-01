@@ -135,6 +135,24 @@ Upgrade features:
   mark_habit        → parameters.habit_name (string like "gym", "study")
   show_profile      → no parameters
 
+Messaging:
+  send_message      → parameters.platform ("whatsapp"/"telegram"/"messenger"),
+                       parameters.recipient (string), parameters.message (string)
+  read_messages     → parameters.platform ("whatsapp"/"telegram"/"messenger"),
+                       parameters.limit (optional int, default 10)
+
+Media control:
+  media_play_pause  → parameters.app (optional: "spotify", "vlc", "youtube")
+  media_next        → parameters.app (optional)
+  media_prev        → parameters.app (optional)
+  media_volume      → parameters.level (int 0-100), parameters.app (optional)
+  media_search      → parameters.query (string), parameters.app (optional: "spotify", "youtube")
+  media_stop        → parameters.app (optional)
+
+Notifications:
+  send_notification → parameters.title (string), parameters.message (string)
+  notify_reminder   → parameters.task (string), parameters.time (optional time string)
+
 Conversational / LLM:
   answer_question   → parameters.prompt (string - the user's full question)
   type_generated_text → parameters.prompt (string)
@@ -160,6 +178,12 @@ Notes for multi-step commands:
 - "download paper attention is all you need" → download with mode=paper and query
 - If user says "download and open it" → set download parameters.open_file=true
 - If user says "download and open folder" → set download parameters.open_folder=true
+- "send hello to John on WhatsApp" → send_message(platform=whatsapp, recipient=John, message=hello)
+- "check my messages on telegram" → read_messages(platform=telegram)
+- "play music" or "pause" → media_play_pause
+- "skip track" or "next song" → media_next
+- "play bohemian rhapsody on spotify" → media_search(query=bohemian rhapsody, app=spotify)
+- "set a reminder: call mom at 3pm" → notify_reminder(task=call mom, time=3pm)
 
 Return ONLY the JSON. No markdown. No explanation.
 """

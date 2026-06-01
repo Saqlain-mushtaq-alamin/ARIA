@@ -406,6 +406,15 @@ _REQUIRED_FIELDS: Dict[str, List[str]] = {
     "edit_schedule":    ["command"],
     "send_message":     ["contact", "message"],
     "download":         [],
+    "read_messages":    ["platform"],
+    "media_search":     ["query"],
+    "media_volume":     ["level"],
+    "media_play_pause": [],
+    "media_next":       [],
+    "media_prev":       [],
+    "media_stop":       [],
+    "send_notification":["message"],
+    "notify_reminder":  ["task"],
 }
 
 
