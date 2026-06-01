@@ -625,7 +625,7 @@ class AriaOverlay(QWidget):
         self._mic_dot  = PulsingDot(CLR_MUTED)
         self._mic_wave = WaveformWidget()
         self._mic_wave.set_mode("idle")
-        mic_btn = QPushButton("⏺")
+        mic_btn = QPushButton("🎙️")
         mic_btn.setFixedSize(20, 16)
         mic_btn.setToolTip("Toggle mic")
         mic_btn.setStyleSheet("font-size:10px; color:#334155; border:none; background:transparent;")

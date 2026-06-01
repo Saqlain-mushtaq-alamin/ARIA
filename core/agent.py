@@ -45,7 +45,14 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Generator
 
-from langchain_core.tools import Tool
+try:
+    from langchain_core.tools import Tool
+except Exception:
+    class Tool:  # type: ignore[override]
+        def __init__(self, name: str, description: str, func: Callable[..., Any]):
+            self.name = name
+            self.description = description
+            self.func = func
 
 from core.router import dispatch_intent, dispatch_multi_step, INTENT_REGISTRY
 from core.question_generator import (
@@ -552,11 +559,68 @@ def _parse_multistep_command(user_text: str) -> dict | None:
         return None
 
     steps: list[dict] = []
+    last_literal_text: str | None = None
+
+    def _parse_save_target(chunk_text: str) -> dict | None:
+        if not re.match(r"^save\b", chunk_text.strip(), re.IGNORECASE):
+            return None
+
+        # Try to extract an explicit path first.
+        path_match = re.search(r"\b([a-zA-Z]:[\\/][^\\/:*?\"<>|]+)", chunk_text)
+        if path_match:
+            path = path_match.group(1).strip()
+            params = {"path": path}
+            if last_literal_text:
+                params["content"] = last_literal_text
+            return {"intent": "save_file", "parameters": params}
+
+        # Try to extract filename and optional location alias.
+        loc_match = re.search(
+            r"\b(?:to|in|on|into)\s+(?:the\s+)?(desktop|documents|downloads|pictures|music|videos)\b",
+            chunk_text,
+            flags=re.IGNORECASE,
+        )
+        loc = loc_match.group(1).lower() if loc_match else ""
+
+        name_match = re.search(
+            r"\b(?:as|named|name)\s+([^\\/:*?\"<>|]+)",
+            chunk_text,
+            flags=re.IGNORECASE,
+        )
+        if not name_match:
+            name_match = re.search(
+                r"\bsave\s+(?:it|this|the\s+file|file)?\s*([^\\/:*?\"<>|]+\.[\w\-]+)",
+                chunk_text,
+                flags=re.IGNORECASE,
+            )
+        filename = name_match.group(1).strip() if name_match else ""
+        if loc and filename:
+            filename = re.split(r"\s+(?:to|in|on|into)\s+", filename, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+
+        if filename and "." not in filename:
+            filename = f"{filename}.txt"
+
+        if loc:
+            filename = filename or "note.txt"
+            path = f"{loc}\\{filename}"
+        elif filename:
+            path = filename
+        else:
+            return None
+
+        params = {"path": path}
+        if last_literal_text:
+            params["content"] = last_literal_text
+        return {"intent": "save_file", "parameters": params}
     for chunk in chunks:
         open_match = re.match(r"^open\s+(.+)$", chunk, re.IGNORECASE)
         if open_match:
             targets = [t.strip() for t in re.split(r"\s+\band\b\s+", open_match.group(1), flags=re.IGNORECASE) if t.strip()]
             for target in targets:
+                save_target = _parse_save_target(target)
+                if save_target:
+                    steps.append(save_target)
+                    continue
                 write_in_open = re.match(r"^(?:write|type)\s+(.+)$", target, re.IGNORECASE)
                 if write_in_open:
                     content = write_in_open.group(1).strip()
@@ -564,10 +628,16 @@ def _parse_multistep_command(user_text: str) -> dict | None:
                         steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
                     else:
                         steps.append({"intent": "type_text", "parameters": {"text": content}})
+                        last_literal_text = content
                     continue
                 parsed = _parse_open_target(target)
                 if parsed:
                     steps.append(parsed)
+            continue
+
+        save_match = _parse_save_target(chunk)
+        if save_match:
+            steps.append(save_match)
             continue
 
         write_match = re.match(r"^(?:write|type)\s+(.+)$", chunk, re.IGNORECASE)
@@ -577,9 +647,15 @@ def _parse_multistep_command(user_text: str) -> dict | None:
                 steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
             else:
                 steps.append({"intent": "type_text", "parameters": {"text": content}})
+                last_literal_text = content
             continue
 
-        parsed = _parse_system_command(chunk) or _parse_browser_command(chunk) or _parse_scheduler_command(chunk)
+        parsed = (
+            _parse_system_command(chunk)
+            or _parse_app_control_command(chunk)
+            or _parse_browser_command(chunk)
+            or _parse_scheduler_command(chunk)
+        )
         if parsed:
             steps.append(parsed)
             continue
@@ -921,11 +997,21 @@ def process_text_stream(
     payload: dict[str, Any] = {}
 
     # Fast parsers first (no Ollama call, instant)
-    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command):
-        result = parser(user_text)
-        if isinstance(result, dict):
-            payload = result
-            break
+    multi = _parse_multistep_command(normalized_text)
+    if isinstance(multi, dict):
+        payload = multi
+
+    if not payload:
+        for parser in (
+            _parse_system_command,
+            _parse_app_control_command,
+            _parse_scheduler_command,
+            _parse_browser_command,
+        ):
+            result = parser(user_text)
+            if isinstance(result, dict):
+                payload = result
+                break
 
     # LLM classification if fast parsers didn't match
     if not payload:
@@ -1031,6 +1117,7 @@ def process_text_stream(
         yield f"Got it — I'll do {total} things for you.\n"
 
         results_all: list[str] = []
+        last_typed_text: str | None = None
 
         for i, raw_step in enumerate(steps, 1):
             if cancel_requested():
@@ -1042,6 +1129,14 @@ def process_text_stream(
             # Generate content if this step needs LLM-produced text
             step = _generate_step_content(raw_step)
             step_params = step.get("parameters") or {}
+            if step_intent == "type_text":
+                typed_text = step_params.get("text")
+                if isinstance(typed_text, str) and typed_text:
+                    last_typed_text = typed_text
+            if step_intent in {"save_file", "create_file"} and not step_params.get("content"):
+                if last_typed_text:
+                    step_params = {**step_params, "content": last_typed_text}
+                    step = {"intent": step_intent, "parameters": step_params}
             if cancel_requested():
                 yield "Canceled."
                 return
