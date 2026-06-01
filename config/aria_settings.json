@@ -1,6 +1,6 @@
 {
   "llm": {
-    "model": "qwen2.5:14b-instruct-q4_K_M",
+    "model": "llama3",
     "vision_model": "llava:7b",
     "temperature": 0.7,
     "ollama_url": "http://localhost:11434"
@@ -105,9 +105,25 @@
     "theme": "dark",
     "show_narration": true
   },
+  "messenger": {
+    "enabled": true,
+    "double_confirmation": true,
+    "default_platform": "whatsapp",
+    "auto_reply_enabled": false
+  },
+  "media_control": {
+    "enabled": true,
+    "default_player": "spotify"
+  },
+  "notifier": {
+    "enabled": true,
+    "read_aloud": true,
+    "smart_suggestions": true,
+    "listener_enabled": false
+  },
   "meta": {
-    "version": "2.0",
-    "last_modified": "2026-06-01T00:01:31.834516+00:00",
-    "last_modified_by": "user"
+    "version": "2.1",
+    "last_modified": "2026-06-01T00:53:06.681945+00:00",
+    "last_modified_by": "system"
   }
 }

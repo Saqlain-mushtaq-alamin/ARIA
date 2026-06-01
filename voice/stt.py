@@ -202,22 +202,48 @@ def _is_garbage_transcription(text: str) -> bool:
         if re.match(pattern, lower):
             return True
 
-    # Too many non-English-looking words (high consonant density)
+    # Too many non-English-looking words (high consonant density + uncommon)
+    _COMMON_WORDS = {
+        "the","be","to","of","and","a","in","that","have","i","it","for","not",
+        "on","with","he","as","you","do","at","this","but","his","by","from",
+        "they","we","say","her","she","or","an","will","my","one","all","would",
+        "there","their","what","so","up","out","if","about","who","get","which",
+        "go","me","when","make","can","like","time","no","just","him","know",
+        "take","people","into","year","your","good","some","could","them","see",
+        "other","than","then","now","look","only","come","its","over","think",
+        "also","back","after","use","two","how","our","work","first","well",
+        "way","even","new","want","because","any","these","give","day","most",
+        "us","open","close","set","search","play","pause","stop","skip","send",
+        "read","show","help","hey","hi","hello","delete","create","save","type",
+        "write","move","copy","download","schedule","turn","toggle","shut","lock",
+        "sleep","restart","exit","quit","volume","brightness","mute","file","app",
+        "yes","no","ok","cancel","confirm","please","start","find","run","check",
+        "notepad","chrome","firefox","spotify","weather","news","music","video",
+    }
     def _looks_like_word(w: str) -> bool:
-        """Check if a word looks remotely English (has vowels, reasonable length)."""
+        """Check if a word looks remotely English."""
         w = re.sub(r"[^a-z]", "", w.lower())
         if not w or len(w) < 2:
             return False
+        # Known common word
+        if w in _COMMON_WORDS:
+            return True
         vowels = sum(1 for c in w if c in "aeiou")
         if vowels == 0 and len(w) > 2:
-            return False  # No vowels = not a word (except short abbrevs)
+            return False  # No vowels
+        # Reject words with 4+ consecutive consonants (xroiency, ptensor)
+        if re.search(r"[^aeiou]{4,}", w):
+            return False
+        # Reject very high consonant ratio
+        if len(w) > 3 and vowels / len(w) < 0.2:
+            return False
         return True
 
     if len(words) >= 3:
         real_words = sum(1 for w in words if _looks_like_word(w))
         ratio = real_words / len(words)
-        if ratio < 0.4:
-            return True  # More than 60% gibberish words
+        if ratio < 0.5:
+            return True  # More than 50% gibberish words
 
     # Whisper echo of system prompt
     if "desktop assistant" in lower or "transcribe short commands" in lower:

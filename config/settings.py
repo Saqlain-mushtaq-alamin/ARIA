@@ -491,6 +491,26 @@ _NL_ALIASES: Dict[str, str] = {
     "data masking": "security.sensitive_data_masking",
     "planner": "autonomous_planner.enabled",
     "autonomous planner": "autonomous_planner.enabled",
+    # Messenger
+    "messenger": "messenger.enabled",
+    "messaging": "messenger.enabled",
+    "default platform": "messenger.default_platform",
+    "auto reply": "messenger.auto_reply_enabled",
+    "auto-reply": "messenger.auto_reply_enabled",
+    "chatbot reply": "messenger.auto_reply_enabled",
+    # Media control
+    "media control": "media_control.enabled",
+    "music control": "media_control.enabled",
+    "default player": "media_control.default_player",
+    "music player": "media_control.default_player",
+    # Notifier
+    "notifications": "notifier.enabled",
+    "notification": "notifier.enabled",
+    "notifier": "notifier.enabled",
+    "read notifications": "notifier.read_aloud",
+    "read aloud": "notifier.read_aloud",
+    "notification listener": "notifier.listener_enabled",
+    "smart suggestions": "notifier.smart_suggestions",
 }
 
 
