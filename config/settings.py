@@ -357,6 +357,9 @@ def format_settings(section: Optional[str] = None) -> str:
         "voice": "🎤",
         "security": "🔒",
         "ui": "🎨",
+        "messenger": "💬",
+        "media_control": "🎵",
+        "notifier": "🔔",
     }
 
     for key, val in settings.items():
