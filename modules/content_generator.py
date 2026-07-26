@@ -39,17 +39,22 @@ def generate_text(prompt: str, model: str = "") -> str:
     effective_model = model if model else _get_model()
     temperature = _get_temperature()
 
+    _ARIA_SYSTEM = (
+        "You are ARIA — an Autonomous Reasoning & Intelligent Assistant. "
+        "You are the user's smart AI companion, helper, co-worker, and friend. "
+        "You are thoughtful, warm, capable, and always professional. "
+        "You always address the user as 'Sir'. "
+        "Be concise but complete. If generating creative content (stories, poems, emails), "
+        "produce high-quality, well-structured content. "
+        "If answering questions, be accurate, clear, and helpful. "
+        "Never refuse reasonable requests. Always try your best to assist Sir."
+    )
+
     with llm_busy_context():
         response = ollama.chat(
             model=effective_model,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful writing assistant. "
-                        "Answer clearly and concisely unless asked for a story."
-                    ),
-                },
+                {"role": "system", "content": _ARIA_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
             options={"temperature": temperature},
