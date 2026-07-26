@@ -125,15 +125,88 @@ def _postprocess_command(text: str) -> str:
     # Normalise volume commands.
     lower = re.sub(r"\bset\s+volume\s+(?:at|to)\s+(\d{1,3})\b",    r"set volume \1", lower)
     lower = re.sub(r"\bchange\s+volume\s+(?:at|to)\s+(\d{1,3})\b", r"set volume \1", lower)
+    lower = re.sub(r"\bvolume\s+(?:at|to)\s+(\d{1,3})\b",          r"set volume \1", lower)
+    lower = re.sub(r"\bturn\s+(?:the\s+)?volume\s+(?:up|down)\s+to\s+(\d{1,3})\b", r"set volume \1", lower)
 
-    # Common STT confusions.
+    # Common STT confusions — app names and verbs
     replacements = {
-        "bad pad":     "notepad",
-        "note pad":    "notepad",
-        "noteeped":    "notepad",
-        "task maneger":"task manager",
-        "taskmanager": "task manager",
-        "fire fox":    "firefox",
+        # Notepad variants
+        "bad pad":      "notepad",
+        "note pad":     "notepad",
+        "noteeped":     "notepad",
+        "node pad":     "notepad",
+        "no pad":       "notepad",
+        "not pad":      "notepad",
+        "noted pad":    "notepad",
+        "notepadd":     "notepad",
+        "notes pad":    "notepad",
+        # Task manager
+        "task maneger": "task manager",
+        "taskmanager":  "task manager",
+        "task manger":  "task manager",
+        "task manage":  "task manager",
+        "task management": "task manager",
+        # Firefox
+        "fire fox":     "firefox",
+        "fire-fox":     "firefox",
+        "fire for":     "firefox",
+        # Chrome
+        "chrome browser": "chrome",
+        "google crome": "chrome",
+        "crome":        "chrome",
+        # File Explorer
+        "file explore": "file explorer",
+        "file explores": "file explorer",
+        "file explorer app": "file explorer",
+        "fax plorer":   "file explorer",
+        "fire explorer": "file explorer",
+        # Calculator
+        "calculated":   "calculator",
+        "calculater":   "calculator",
+        "calculates":   "calculator",
+        # Settings
+        "setting":      "settings",
+        # Volume words
+        "voulume":      "volume",
+        "volum":        "volume",
+        "vollume":      "volume",
+        # Open variants
+        "opan":         "open",
+        "ope":          "open",
+        "oben":         "open",
+        # Close variants
+        "clothes":      "close",
+        "clause":       "close",
+        # Search variants
+        "such":         "search",
+        "serch":        "search",
+        "search for":   "search",
+        # Turn on/off WiFi
+        "turn off why fi": "turn off wifi",
+        "turn on why fi":  "turn on wifi",
+        "turn off wy fi":  "turn off wifi",
+        "wi fi":        "wifi",
+        "why fi":       "wifi",
+        "wy fi":        "wifi",
+        # Shutdown
+        "shut down":    "shutdown",
+        "shout down":   "shutdown",
+        "shot down":    "shutdown",
+        # Screenshot
+        "screen shot":  "screenshot",
+        "screen capture": "screenshot",
+        # Spotify
+        "spotifiy":     "spotify",
+        "spot if i":    "spotify",
+        # Discord
+        "disc cord":    "discord",
+        # Write / type
+        "right":        "write",   # only when alone
+        # Brightness
+        "brightness to": "set brightness to",
+        # "and then" normalisation
+        "and den":      "and then",
+        "and zen":      "and then",
     }
     for wrong, right in replacements.items():
         lower = re.sub(rf"\b{re.escape(wrong)}\b", right, lower)
@@ -160,6 +233,7 @@ def _postprocess_command(text: str) -> str:
                 return f"{verb} {best[0]}"
 
     return lower
+
 
 
 def _is_garbage_transcription(text: str) -> bool:
