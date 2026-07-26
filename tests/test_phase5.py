@@ -21,9 +21,8 @@ def t_log_interaction():
     from memory.conversation_log import log_interaction, get_recent_interactions
     log_interaction("test user command", "test ARIA response",
                     metadata={"source": "test"})
-    turns = get_recent_interactions(n=5)
+    turns = get_recent_interactions(limit=5)
     assert len(turns) > 0
-    # Check most recent has our test content
     texts = [str(t) for t in turns]
     assert any("test" in t.lower() for t in texts)
 
@@ -42,7 +41,7 @@ def t_conversation_roundtrip():
     from memory.conversation_log import log_interaction, get_recent_interactions
     unique_tag = "ARIA_TEST_TAG_XYZ_12345"
     log_interaction(f"command with {unique_tag}", "response")
-    turns = get_recent_interactions(n=10)
+    turns = get_recent_interactions(limit=10)
     found = any(unique_tag in str(t) for t in turns)
     assert found, "Could not find test tag in conversation log"
 
