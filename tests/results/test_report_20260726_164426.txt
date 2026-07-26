@@ -1,0 +1,19 @@
+ARIA Test Report -- 2026-07-26 16:44:26
+============================================================
+[PHASE2      ] [PASS]  STT: 'note pad' → 'notepad'
+[PHASE2      ] [PASS]  STT: 'bad pad' → 'notepad'
+[PHASE2      ] [PASS]  STT: 'task maneger' → 'task manager'
+[PHASE2      ] [PASS]  STT: 'fire fox' → 'firefox'
+[PHASE2      ] [PASS]  STT: 'set volume at 30' normalised
+[PHASE2      ] [PASS]  STT: 'set volume to 75' normalised
+[PHASE2      ] [PASS]  Garbage: '...' → rejected
+[PHASE2      ] [FAIL]  Garbage: 'uh um hmm' → rejected
+[PHASE2      ] [PASS]  Garbage: lone article 'the' → rejected
+[PHASE2      ] [PASS]  Garbage: 'open notepad' → NOT rejected
+[PHASE2      ] [PASS]  Garbage: 'what is the weather in Dhaka' → NOT rejected
+[PHASE2      ] [PASS]  Garbage: whisper echo of system prompt → rejected
+[PHASE2      ] [PASS]  TTS: speak() doesn't crash on normal text
+[PHASE2      ] [PASS]  TTS: sanitize strips leading glyphs
+[PHASE2      ] [PASS]  TTS: sanitize handles unicode
+============================================================
+PASS: 14  FAIL: 1  SKIP: 0  TOTAL: 15

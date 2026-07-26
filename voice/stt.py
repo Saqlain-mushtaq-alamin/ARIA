@@ -269,8 +269,8 @@ def _is_garbage_transcription(text: str) -> bool:
         r"^\.+$",                          # Just dots
         r"^\*+$",                          # Just asterisks
         r"^[\-\.\,\!\?\s]+$",             # Just punctuation
-        r"^(uh|um|hmm|huh|ah|eh)+$",      # Filler sounds
-        r"^(the|a|an|is|it|to|of|in)\s*$", # Lone articles/prepositions
+        r"^(uh|um|hmm|huh|ah|eh|oh|mm|er|like|you know)(\s+(uh|um|hmm|huh|ah|eh|oh|mm|er|like|you know))*\s*$",  # Filler sounds (with spaces)
+        r"^(the|a|an|is|it|to|of|in)\s*$",  # Lone articles/prepositions
     ]
     for pattern in noise_patterns:
         if re.match(pattern, lower):
