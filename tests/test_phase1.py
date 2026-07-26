@@ -39,7 +39,6 @@ def t_open_notepad():
 
 @test("set volume to 50 → set_volume intent", "PHASE1", "fast_parser")
 def t_set_volume():
-    from core.agent import _parse_system_command
     r = _parse_system_command("set volume to 50")
     if r is None:
         r = classify_intent("set volume to 50")
@@ -50,7 +49,6 @@ def t_set_volume():
 
 @test("turn off wifi → toggle_wifi intent", "PHASE1", "fast_parser")
 def t_toggle_wifi():
-    from core.agent import _parse_system_command
     r = _parse_system_command("turn off wifi")
     if r is None:
         r = classify_intent("turn off wifi")
