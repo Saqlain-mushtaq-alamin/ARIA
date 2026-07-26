@@ -1193,6 +1193,24 @@ def process_text_stream(
             try:
                 outcome = dispatch_intent(step)
                 result_str = str(outcome).strip() if outcome is not None else "Done."
+
+                # ── Smart inter-step delay ───────────────────────────────────
+                # When opening an app, wait for it to load before the next step
+                # (especially before type_text — the window must be focused first)
+                if step_intent == "open_app" and i < total:
+                    next_step_intent = str((steps[i] if i < len(steps) else {}).get("intent", "")).lower()
+                    if next_step_intent in ("type_text", "press_key", "hotkey"):
+                        import time as _time
+                        app_name = step_params.get("app_name", "app")
+                        yield f"  ⏳ Waiting for {app_name} to load..."
+                        _time.sleep(2.5)  # Give the app time to open and gain focus
+                        # Bring it to front by clicking its taskbar button
+                        try:
+                            import pyautogui as _pag
+                            _pag.click()  # click on current focus position to ensure keyboard focus
+                        except Exception:
+                            pass
+
                 try:
                     assessment = assess_risk(step)
                     log_action(
@@ -1209,6 +1227,7 @@ def process_text_stream(
                 yield _step_success(i, total, label, result_str)
                 results_all.append(f"Step {i}: {result_str[:60]}")
             except Exception as exc:
+
                 try:
                     assessment = assess_risk(step)
                     log_action(
