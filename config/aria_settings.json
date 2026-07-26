@@ -1,0 +1,129 @@
+{
+  "llm": {
+    "model": "llama3:latest",
+    "vision_model": "llava:7b",
+    "temperature": 0.7,
+    "ollama_url": "http://localhost:11434"
+  },
+  "emotion": {
+    "enabled": true,
+    "interval_seconds": 60,
+    "window_minutes": 60,
+    "camera_index": 0,
+    "require_face": true,
+    "min_frame_stddev": 5.0,
+    "log_samples": true,
+    "save_last_frame": false,
+    "rule_speak": false,
+    "rule_states": "tired,stressed,frustrated",
+    "rule_mode": "anytime_sustained",
+    "rule_night_start": 21,
+    "rule_night_end": 6,
+    "rule_tasks_to_move": 2,
+    "rule_min_score": 35,
+    "rule_sustained_samples": 3,
+    "rule_sustained_minutes": 25,
+    "rule_cooldown_minutes": 45
+  },
+  "screen_reader": {
+    "enabled": true,
+    "interval_seconds": 60,
+    "history_size": 5,
+    "stuck_minutes": 20,
+    "debug": false,
+    "log_summaries": true,
+    "nudge_cooldown_minutes": 10
+  },
+  "cognitive_monitor": {
+    "enabled": true,
+    "update_interval_seconds": 300,
+    "window_size": 100,
+    "alert_threshold": 80
+  },
+  "productivity_guardian": {
+    "enabled": true,
+    "check_interval_seconds": 60,
+    "distraction_threshold_minutes": 3,
+    "cooldown_after_alert_minutes": 10,
+    "distraction_apps": [
+      "instagram",
+      "facebook",
+      "twitter",
+      "tiktok",
+      "reddit",
+      "youtube",
+      "netflix",
+      "twitch",
+      "snapchat",
+      "discord",
+      "whatsapp web",
+      "telegram web"
+    ]
+  },
+  "focus_mode": {
+    "work_minutes": 25,
+    "short_break_minutes": 5,
+    "long_break_minutes": 20,
+    "cycles_before_long_break": 4,
+    "block_domains": [
+      "instagram.com",
+      "facebook.com",
+      "twitter.com",
+      "x.com",
+      "tiktok.com",
+      "reddit.com",
+      "youtube.com",
+      "netflix.com",
+      "twitch.tv",
+      "9gag.com",
+      "buzzfeed.com",
+      "snapchat.com"
+    ]
+  },
+  "autonomous_planner": {
+    "enabled": true,
+    "morning_briefing_time": "06:00",
+    "evening_review_time": "22:00"
+  },
+  "voice": {
+    "mode": "wakeword",
+    "stt_model": "base",
+    "session_seconds": 25,
+    "max_empty_listens": 2,
+    "tts_enabled": true
+  },
+  "security": {
+    "require_confirmation_for_dangerous": true,
+    "audit_log_enabled": true,
+    "max_dangerous_actions_per_hour": 10,
+    "pin_protected": false,
+    "pin_hash": "",
+    "sensitive_data_masking": true
+  },
+  "ui": {
+    "overlay_enabled": true,
+    "theme": "dark",
+    "show_narration": true
+  },
+  "messenger": {
+    "enabled": true,
+    "double_confirmation": true,
+    "default_platform": "whatsapp",
+    "auto_reply_enabled": false
+  },
+  "media_control": {
+    "enabled": true,
+    "default_player": "spotify"
+  },
+  "notifier": {
+    "enabled": true,
+    "read_aloud": true,
+    "smart_suggestions": true,
+    "listener_enabled": false
+  },
+  "meta": {
+    "version": "2.1",
+    "last_modified": "2026-06-01T17:34:21.340591+00:00",
+    "last_modified_by": "user"
+  }
+}

@@ -21,7 +21,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from core.agent import process_text
+from core.agent import process_text, request_cancel
 from memory.conversation_log import log_interaction
 from scheduler import tracker
 from ui.chat_window import AriaChatWindow
@@ -31,6 +31,7 @@ from ui.tray_icon import AriaTrayIcon
 from voice.stt import listen_and_transcribe
 from voice.tts import speak
 from voice.wake_word import start_wake_word_listener
+from config.settings import set_value as set_setting
 
 
 class _UiSignals(QObject):
@@ -40,6 +41,8 @@ class _UiSignals(QObject):
     overlay_voice_enabled = pyqtSignal(bool)
     overlay_gesture_enabled = pyqtSignal(bool)
     overlay_task_text = pyqtSignal(str)
+    overlay_pause_visible = pyqtSignal(bool)
+    overlay_pause_busy = pyqtSignal(bool)
     notification = pyqtSignal(str, str)  # title, message
     refresh_tasks = pyqtSignal()
     scheduler_reload = pyqtSignal()
@@ -131,6 +134,8 @@ class VoiceController:
             # Wake word fired; capture a command session.
             self._signals.tray_state.emit("listening")
             self._signals.overlay_mic_state.emit(AriaOverlay.MIC_LISTENING)
+            self._signals.overlay_pause_visible.emit(False)
+            self._signals.overlay_pause_busy.emit(False)
 
             session_seconds = float(os.getenv("VOICE_SESSION_SECONDS", "25"))
             max_empty = int(os.getenv("VOICE_SESSION_MAX_EMPTY", "2"))
@@ -164,6 +169,8 @@ class VoiceController:
                 # Process command synchronously in this voice thread (already background)
                 self._signals.tray_state.emit("processing")
                 self._signals.overlay_mic_state.emit(AriaOverlay.MIC_PROCESSING)
+                self._signals.overlay_pause_visible.emit(True)
+                self._signals.overlay_pause_busy.emit(False)
 
                 try:
                     response = process_text(text)
@@ -173,6 +180,8 @@ class VoiceController:
                 self._signals.chat_add.emit("user", text)
                 self._signals.chat_add.emit("aria", response)
                 self._signals.refresh_tasks.emit()
+                self._signals.overlay_pause_visible.emit(False)
+                self._signals.overlay_pause_busy.emit(False)
 
                 try:
                     log_interaction(text, response, metadata={"source": "voice"})
@@ -230,6 +239,8 @@ class AriaDesktopUi:
     def _wire_signals(self) -> None:
         # UI → core
         self.overlay.command_submitted.connect(lambda t: self._handle_text(t, source="overlay"))
+        self.overlay.model_selected.connect(self._on_model_selected)
+        self.overlay.pause_requested.connect(self._on_pause_requested)
         self.chat.message_sent.connect(lambda t: self._handle_text(t, source="chat"))
 
         self.overlay.mic_toggled.connect(self._on_voice_toggle)
@@ -256,9 +267,27 @@ class AriaDesktopUi:
         self._signals.overlay_voice_enabled.connect(self.overlay.set_voice_enabled)
         self._signals.overlay_gesture_enabled.connect(self.overlay.set_gesture_enabled)
         self._signals.overlay_task_text.connect(self.overlay.set_task)
+        self._signals.overlay_pause_visible.connect(self.overlay.set_pause_visible)
+        self._signals.overlay_pause_busy.connect(self.overlay.set_pause_busy)
         self._signals.notification.connect(self.tray.show_notification)
         self._signals.refresh_tasks.connect(self._refresh_task_views)
         self._signals.scheduler_reload.connect(self._reload_scheduler_from_tracker)
+
+    def _on_model_selected(self, model_name: str) -> None:
+        if not model_name:
+            return
+        try:
+            set_setting("llm.model", model_name)
+            self._signals.notification.emit("ARIA", f"Model set to {model_name}")
+        except Exception as exc:
+            self._signals.notification.emit("ARIA", f"Model update failed: {exc}")
+
+    def _on_pause_requested(self) -> None:
+        request_cancel()
+        try:
+            self.overlay.set_pause_busy(True)
+        except Exception:
+            pass
 
     def _start_screen_reader(self) -> None:
         try:
@@ -340,6 +369,8 @@ class AriaDesktopUi:
 
         self._signals.tray_state.emit("processing")
         self._signals.overlay_mic_state.emit(AriaOverlay.MIC_PROCESSING)
+        self.overlay.set_pause_visible(True)
+        self.overlay.set_pause_busy(False)
 
         # Add the user's message immediately for non-chat sources.
         # (The chat window already renders the user's bubble before emitting
@@ -360,6 +391,11 @@ class AriaDesktopUi:
             self._signals.chat_add.emit("aria", response)
             self._signals.tray_state.emit("idle" if self.voice.is_enabled() else "muted")
             self._signals.overlay_mic_state.emit(AriaOverlay.MIC_IDLE)
+            try:
+                self.overlay.set_pause_visible(False)
+                self.overlay.set_pause_busy(False)
+            except Exception:
+                pass
             self._signals.refresh_tasks.emit()
 
             try:

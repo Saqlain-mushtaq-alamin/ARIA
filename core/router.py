@@ -27,6 +27,121 @@ from scheduler.tracker import create_schedule_from_text, edit_schedule, show_sch
 from safety.harm_classifier import assess_risk, DANGEROUS, BLOCKED
 from safety.recycle_buffer import safe_delete
 
+# ── Upgrade modules (lazy-loaded to avoid circular imports) ──────────────────
+def _social_comment(tone: str = "thoughtful", **_: Any) -> str:
+    from modules.social_agent import comment_on_post
+    return comment_on_post(tone=tone)
+
+def _explain_selected(**_: Any) -> str:
+    from modules.social_agent import explain_selected_text
+    return explain_selected_text()
+
+def _start_focus(task: str = "deep work", work_minutes: int = 0, **_: Any) -> str:
+    from modules.focus_mode import start_focus_mode
+    return start_focus_mode(task=task, work_min=work_minutes)
+
+def _stop_focus(**_: Any) -> str:
+    from modules.focus_mode import stop_focus_mode
+    return stop_focus_mode()
+
+def _decompose_goal(goal: str = "", deadline: str = "", **_: Any) -> str:
+    from scheduler.goal_decomposer import decompose_goal
+    return decompose_goal(goal=goal, deadline_str=deadline)
+
+def _show_settings(section: str = "", **_: Any) -> str:
+    from config.settings import format_settings
+    return format_settings(section=section or None)
+
+def _change_setting(key: str = "", value: Any = None, **_: Any) -> str:
+    from config.settings import set_value
+    if not key:
+        return "Please specify which setting to change."
+    return set_value(key, value)
+
+def _query_knowledge(topic: str = "", **_: Any) -> str:
+    from memory.knowledge_graph import query_formatted
+    return query_formatted(topic)
+
+def _show_habits(**_: Any) -> str:
+    from memory.habit_tracker import get_all_habits_summary
+    return get_all_habits_summary()
+
+def _mark_habit(habit_name: str = "", **_: Any) -> str:
+    from memory.habit_tracker import mark_habit_done
+    return mark_habit_done(habit_name)
+
+def _show_profile(**_: Any) -> str:
+    from memory.user_profile import get_profile_summary
+    return get_profile_summary()
+
+def _download(
+    target: str = "",
+    mode: str = "auto",
+    output_name: str = "",
+    downloads_dir: str = "",
+    open_folder: bool = False,
+    open_file: bool = False,
+    allow_large: bool = False,
+    strict: bool = False,
+    **_: Any,
+) -> str:
+    from modules.downloader import download_command
+    return download_command(
+        target=target,
+        mode=mode,
+        output_name=output_name or None,
+        downloads_dir=downloads_dir or None,
+        open_folder=bool(open_folder),
+        open_file=bool(open_file),
+        allow_large=bool(allow_large),
+        strict=bool(strict),
+    )
+
+# ── Messenger module (lazy-loaded) ───────────────────────────────────────
+def _send_message(platform: str = "", recipient: str = "", message: str = "",
+                  ask_fn: Optional[Callable] = None, **kw: Any) -> str:
+    from modules.messenger import send_message
+    return send_message(platform=platform, recipient=recipient, message=message,
+                        ask_fn=ask_fn, **kw)
+
+def _read_messages(platform: str = "", limit: int = 10, **kw: Any) -> str:
+    from modules.messenger import read_unread_messages
+    return read_unread_messages(platform=platform, limit=limit, **kw)
+
+# ── Media control module (lazy-loaded) ───────────────────────────────────
+def _media_play_pause(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_play_pause
+    return media_play_pause(app=app, **kw)
+
+def _media_next(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_next
+    return media_next(app=app, **kw)
+
+def _media_prev(app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_prev
+    return media_prev(app=app, **kw)
+
+def _media_volume(level: int = 50, app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_volume
+    return media_volume(level=level, app=app, **kw)
+
+def _media_search(query: str = "", app: str = "", **kw: Any) -> str:
+    from modules.media_control import media_search
+    return media_search(query=query, app=app, **kw)
+
+def _media_stop(**kw: Any) -> str:
+    from modules.media_control import media_stop
+    return media_stop(**kw)
+
+# ── Notifier module (lazy-loaded) ────────────────────────────────────────
+def _send_notification(title: str = "ARIA", message: str = "", **kw: Any) -> str:
+    from modules.notifier import send_toast
+    return send_toast(title=title, message=message, **kw)
+
+def _notify_reminder(task: str = "", time_str: str = "", **kw: Any) -> str:
+    from modules.notifier import notify_reminder
+    return notify_reminder(task=task, time_str=time_str, **kw)
+
 _GESTURE_CONTROLLER_PROC: Optional[subprocess.Popen] = None
 
 
@@ -479,12 +594,42 @@ INTENT_REGISTRY: Dict[str, Callable[..., Any]] = {
     "get_news":         _get_news,
     "search_papers":    _search_papers,
     "get_stock":        _get_stock,
+    "download":         _download,
 
     # Scheduler
     "create_schedule":  create_schedule_from_text,
     "show_schedule":    show_schedule,
     "whats_next":       whats_next,
     "edit_schedule":    edit_schedule,
+
+    # ── Upgrade features ─────────────────────────────────────────────────
+    "comment_on_post":    _social_comment,
+    "explain_selected":   _explain_selected,
+    "start_focus_mode":   _start_focus,
+    "stop_focus_mode":    _stop_focus,
+    "decompose_goal":     _decompose_goal,
+    "show_settings":      _show_settings,
+    "change_setting":     _change_setting,
+    "query_knowledge":    _query_knowledge,
+    "show_habits":        _show_habits,
+    "mark_habit":         _mark_habit,
+    "show_profile":       _show_profile,
+
+    # ── Messenger ────────────────────────────────────────────────────────
+    "send_message":       _send_message,
+    "read_messages":      _read_messages,
+
+    # ── Media control ────────────────────────────────────────────────────
+    "media_play_pause":   _media_play_pause,
+    "media_next":         _media_next,
+    "media_prev":         _media_prev,
+    "media_volume":       _media_volume,
+    "media_search":       _media_search,
+    "media_stop":         _media_stop,
+
+    # ── Notifier ─────────────────────────────────────────────────────────
+    "send_notification":  _send_notification,
+    "notify_reminder":    _notify_reminder,
 }
 
 INTENT_ALIASES: Dict[str, str] = {
@@ -564,6 +709,9 @@ INTENT_ALIASES: Dict[str, str] = {
     "arxiv":            "search_papers",
     "stock":            "get_stock",
     "price":            "get_stock",
+    "download":         "download",
+    "download_file":    "download",
+    "downloader":       "download",
     # Scheduler
     "schedule":         "create_schedule",
     "plan_day":         "create_schedule",
@@ -573,6 +721,66 @@ INTENT_ALIASES: Dict[str, str] = {
     "next_task":        "whats_next",
     "what_next":        "whats_next",
     "edit_plan":        "edit_schedule",
+    # Upgrade features
+    "comment":          "comment_on_post",
+    "generate_comment": "comment_on_post",
+    "social_comment":   "comment_on_post",
+    "explain":          "explain_selected",
+    "explain_text":     "explain_selected",
+    "explain_this":     "explain_selected",
+    "focus":            "start_focus_mode",
+    "focus_mode":       "start_focus_mode",
+    "deep_work":        "start_focus_mode",
+    "start_pomodoro":   "start_focus_mode",
+    "stop_focus":       "stop_focus_mode",
+    "end_focus":        "stop_focus_mode",
+    "break_goal":       "decompose_goal",
+    "plan_goal":        "decompose_goal",
+    "goal":             "decompose_goal",
+    "settings":         "show_settings",
+    "preferences":      "show_settings",
+    "config":           "show_settings",
+    "set_setting":      "change_setting",
+    "update_setting":   "change_setting",
+    "knowledge":        "query_knowledge",
+    "knowledge_graph":  "query_knowledge",
+    "habits":           "show_habits",
+    "my_habits":        "show_habits",
+    "habit_done":       "mark_habit",
+    "log_habit":        "mark_habit",
+    "profile":          "show_profile",
+    "my_profile":       "show_profile",
+    # Messenger
+    "message":          "send_message",
+    "text_message":     "send_message",
+    "send_text":        "send_message",
+    "send_msg":         "send_message",
+    "read_message":     "read_messages",
+    "check_messages":   "read_messages",
+    "unread_messages":  "read_messages",
+    # Media control
+    "play":             "media_play_pause",
+    "pause":            "media_play_pause",
+    "play_pause":       "media_play_pause",
+    "play_music":       "media_play_pause",
+    "pause_music":      "media_play_pause",
+    "next_track":       "media_next",
+    "skip":             "media_next",
+    "skip_track":       "media_next",
+    "previous_track":   "media_prev",
+    "prev_track":       "media_prev",
+    "media_volume":     "media_volume",
+    "music_volume":     "media_volume",
+    "search_music":     "media_search",
+    "find_song":        "media_search",
+    "play_song":        "media_search",
+    "stop_music":       "media_stop",
+    # Notifier
+    "notify":           "send_notification",
+    "notification":     "send_notification",
+    "toast":            "send_notification",
+    "reminder":         "notify_reminder",
+    "set_reminder":     "notify_reminder",
 }
 
 
@@ -758,6 +966,28 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
             raise ValueError("Stock symbol is required")
         return handler(symbol=str(symbol))
 
+    if intent == "download":
+        target = (
+            parameters.get("url")
+            or parameters.get("target")
+            or parameters.get("query")
+            or parameters.get("title")
+            or parameters.get("link")
+            or ""
+        )
+        if not str(target).strip():
+            raise ValueError("Download target is required")
+        return handler(
+            target=str(target),
+            mode=str(parameters.get("mode") or parameters.get("type") or parameters.get("kind") or "auto"),
+            output_name=str(parameters.get("output_name") or parameters.get("output") or parameters.get("filename") or ""),
+            downloads_dir=str(parameters.get("downloads_dir") or parameters.get("download_dir") or parameters.get("folder") or ""),
+            open_folder=bool(parameters.get("open_folder", False)),
+            open_file=bool(parameters.get("open_file", False)),
+            allow_large=bool(parameters.get("allow_large", False)),
+            strict=bool(parameters.get("strict", False)),
+        )
+
     # ── Scheduler intents ───────────────────────────────────────────────────
     if intent == "create_schedule":
         text = parameters.get("text") or ""
@@ -769,6 +999,90 @@ def dispatch_intent(payload: Dict[str, Any]) -> Any:
     if intent == "edit_schedule":
         command = parameters.get("command") or ""
         return handler(command)
+
+    # ── Upgrade feature intents ─────────────────────────────────────────────
+    if intent == "comment_on_post":
+        return handler(tone=str(parameters.get("tone", "thoughtful")))
+
+    if intent == "explain_selected":
+        return handler()
+
+    if intent == "start_focus_mode":
+        return handler(
+            task=str(parameters.get("task", "deep work")),
+            work_minutes=int(parameters.get("work_minutes", 0)),
+        )
+
+    if intent == "stop_focus_mode":
+        return handler()
+
+    if intent == "decompose_goal":
+        return handler(
+            goal=str(parameters.get("goal", "")),
+            deadline=str(parameters.get("deadline", "")),
+        )
+
+    if intent == "show_settings":
+        return handler(section=str(parameters.get("section", "")))
+
+    if intent == "change_setting":
+        return handler(
+            key=str(parameters.get("key", "")),
+            value=parameters.get("value"),
+        )
+
+    if intent == "query_knowledge":
+        return handler(topic=str(parameters.get("topic", "")))
+
+    if intent in {"show_habits", "show_profile"}:
+        return handler()
+
+    if intent == "mark_habit":
+        return handler(habit_name=str(parameters.get("habit_name", "")))
+
+    # ── Messenger intents ────────────────────────────────────────────────────
+    if intent == "send_message":
+        return handler(
+            platform=str(parameters.get("platform", "")),
+            recipient=str(parameters.get("recipient") or parameters.get("contact", "")),
+            message=str(parameters.get("message") or parameters.get("text", "")),
+            ask_fn=payload.get("ask_fn"),
+        )
+
+    if intent == "read_messages":
+        return handler(
+            platform=str(parameters.get("platform", "")),
+            limit=int(parameters.get("limit", 10)),
+        )
+
+    # ── Media control intents ────────────────────────────────────────────────
+    if intent in {"media_play_pause", "media_next", "media_prev", "media_stop"}:
+        return handler(app=str(parameters.get("app", "")))
+
+    if intent == "media_volume":
+        return handler(
+            level=int(parameters.get("level", 50)),
+            app=str(parameters.get("app", "")),
+        )
+
+    if intent == "media_search":
+        return handler(
+            query=str(parameters.get("query") or parameters.get("track", "")),
+            app=str(parameters.get("app", "")),
+        )
+
+    # ── Notifier intents ─────────────────────────────────────────────────────
+    if intent == "send_notification":
+        return handler(
+            title=str(parameters.get("title", "ARIA")),
+            message=str(parameters.get("message", "")),
+        )
+
+    if intent == "notify_reminder":
+        return handler(
+            task=str(parameters.get("task", "")),
+            time_str=str(parameters.get("time", "")),
+        )
 
     # ── Generic fallback: pass parameters as kwargs ─────────────────────────
     return handler(**parameters)

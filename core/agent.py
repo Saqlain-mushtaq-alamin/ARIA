@@ -40,11 +40,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Generator
 
-from langchain_core.tools import Tool
+try:
+    from langchain_core.tools import Tool
+except Exception:
+    class Tool:  # type: ignore[override]
+        def __init__(self, name: str, description: str, func: Callable[..., Any]):
+            self.name = name
+            self.description = description
+            self.func = func
 
 from core.router import dispatch_intent, dispatch_multi_step, INTENT_REGISTRY
 from core.question_generator import (
@@ -97,6 +105,21 @@ except Exception:
     def llm_busy_context() -> Any:                   # type: ignore[misc]
         from contextlib import nullcontext
         return nullcontext()
+
+
+_CANCEL_EVENT = threading.Event()
+
+
+def request_cancel() -> None:
+    _CANCEL_EVENT.set()
+
+
+def clear_cancel() -> None:
+    _CANCEL_EVENT.clear()
+
+
+def cancel_requested() -> bool:
+    return _CANCEL_EVENT.is_set()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,6 +184,7 @@ _INTENT_LABELS: dict[str, str] = {
     "get_news":         "Fetching news{topic_suffix}",
     "search_papers":    "Searching {source} for: {query}",
     "get_stock":        "Fetching stock price for: {symbol}",
+    "download":         "Downloading: {target}",
     "create_schedule":  "Building your daily schedule",
     "show_schedule":    "Showing your schedule",
     "whats_next":       "Checking what's next on your schedule",
@@ -170,6 +194,31 @@ _INTENT_LABELS: dict[str, str] = {
     "type_generated_text": "Generating and typing text",
     "activate_kinetic_mode": "Activating kinetic mode",
     "deactivate_kinetic_mode": "Deactivating kinetic mode",
+    # Upgrade features
+    "comment_on_post":    "Generating comment for post",
+    "explain_selected":   "Explaining selected text",
+    "start_focus_mode":   "Starting deep work / focus mode",
+    "stop_focus_mode":    "Stopping focus mode",
+    "decompose_goal":     "Breaking down your goal",
+    "show_settings":      "Showing settings",
+    "change_setting":     "Updating setting: {key}",
+    "query_knowledge":    "Searching knowledge graph for: {topic}",
+    "show_habits":        "Showing your habits",
+    "mark_habit":         "Logging habit: {habit_name}",
+    "show_profile":       "Showing your profile",
+    # Messenger
+    "send_message":       "Sending message to {recipient} via {platform}",
+    "read_messages":      "Reading unread messages from {platform}",
+    # Media control
+    "media_play_pause":   "Toggling play/pause",
+    "media_next":         "Skipping to next track",
+    "media_prev":         "Going to previous track",
+    "media_volume":       "Setting media volume to {level}%",
+    "media_search":       "Searching for: {query}",
+    "media_stop":         "Stopping playback",
+    # Notifier
+    "send_notification":  "Sending notification: {title}",
+    "notify_reminder":    "Setting reminder: {task}",
 }
 
 
@@ -178,6 +227,8 @@ def _label_for_step(intent: str, parameters: dict) -> str:
     template = _INTENT_LABELS.get(intent, f"Running: {intent.replace('_', ' ')}")
     try:
         params = {k: (v or "") for k, v in parameters.items()}
+        if intent == "download" and not params.get("target"):
+            params["target"] = params.get("url") or params.get("query") or params.get("title") or ""
         params.setdefault("topic_suffix",
                           f" on '{parameters.get('topic')}'" if parameters.get("topic") else "")
         return template.format(**params)
@@ -212,11 +263,49 @@ def _divider(total: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Memory + emotion context injection
+# Short-term context tracker (last interaction memory for follow-ups)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LAST_INTERACTION: dict[str, Any] = {
+    "user_text": "",
+    "intent": "",
+    "parameters": {},
+    "response": "",
+    "timestamp": "",
+}
+
+
+def _update_last_interaction(user_text: str, intent: str = "",
+                              parameters: dict | None = None,
+                              response: str = "") -> None:
+    """Track the last interaction for follow-up detection."""
+    _LAST_INTERACTION["user_text"] = user_text
+    _LAST_INTERACTION["intent"] = intent
+    _LAST_INTERACTION["parameters"] = parameters or {}
+    _LAST_INTERACTION["response"] = response
+    _LAST_INTERACTION["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+
+def _is_followup(text: str) -> bool:
+    """Detect if the user's input is a follow-up to the previous interaction."""
+    lower = text.strip().lower()
+    followup_phrases = {
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "go ahead",
+        "do it", "proceed", "confirm", "go", "please", "yes please",
+        "you can", "you can do that", "that's fine", "that works",
+        "alright", "right", "correct", "exactly", "do that",
+        "no", "nah", "nope", "don't", "cancel", "stop", "never mind",
+        "what", "what do you mean", "huh", "explain",
+    }
+    return lower in followup_phrases or len(lower.split()) <= 3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memory + emotion + conversation context injection
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_context_prompt(prompt: str) -> str:
-    """Inject memory and emotion state into a prompt before sending to LLM."""
+    """Inject memory, emotion state, and conversation history into a prompt."""
     vibe_block = ""
     try:
         vibe_path = os.path.normpath(
@@ -273,7 +362,31 @@ def _build_context_prompt(prompt: str) -> str:
     # Screen activity context (LLaVA screen reader — no image stored)
     screen_block = get_screen_context_block()
 
-    parts = [p for p in [vibe_block, memory_block, screen_block] if p]
+    # Cognitive load state (keyboard timing analysis)
+    cognitive_block = ""
+    try:
+        from vision.cognitive_monitor import get_cognitive_state
+        cog = get_cognitive_state()
+        if cog and cog.get("label") != "low":
+            cognitive_block = (
+                f"Cognitive state: load={cog.get('cognitive_load', '?')}/100 "
+                f"({cog.get('label', '?')}). {cog.get('recommendation', '')}"
+            )
+    except Exception:
+        pass
+
+    # Conversation history (recent turns for context continuity)
+    conversation_block = ""
+    try:
+        from memory.conversation_log import get_full_context_string
+        ctx = get_full_context_string(turns=5)
+        if ctx:
+            conversation_block = ctx
+    except Exception:
+        pass
+
+    parts = [p for p in [conversation_block, vibe_block, memory_block,
+                          screen_block, cognitive_block] if p]
     if not parts:
         return prompt
     return "Context (use only if relevant):\n\n" + "\n\n".join(parts) + f"\n\nUser: {prompt}"
@@ -289,10 +402,16 @@ def _generate_step_content(step: dict) -> dict:
     if not params.get("generate"):
         return step
 
+    if cancel_requested():
+        return step
+
     step_intent = step.get("intent", "")
     prompt_text = str(params.get("prompt") or params.get("text") or "Write the requested content.")
     with llm_busy_context():
         generated = generate_text(_build_context_prompt(prompt_text)).strip()
+
+    if cancel_requested():
+        return step
 
     # Clone the step so we don't mutate the original
     new_params = dict(params)
@@ -440,11 +559,68 @@ def _parse_multistep_command(user_text: str) -> dict | None:
         return None
 
     steps: list[dict] = []
+    last_literal_text: str | None = None
+
+    def _parse_save_target(chunk_text: str) -> dict | None:
+        if not re.match(r"^save\b", chunk_text.strip(), re.IGNORECASE):
+            return None
+
+        # Try to extract an explicit path first.
+        path_match = re.search(r"\b([a-zA-Z]:[\\/][^\\/:*?\"<>|]+)", chunk_text)
+        if path_match:
+            path = path_match.group(1).strip()
+            params = {"path": path}
+            if last_literal_text:
+                params["content"] = last_literal_text
+            return {"intent": "save_file", "parameters": params}
+
+        # Try to extract filename and optional location alias.
+        loc_match = re.search(
+            r"\b(?:to|in|on|into)\s+(?:the\s+)?(desktop|documents|downloads|pictures|music|videos)\b",
+            chunk_text,
+            flags=re.IGNORECASE,
+        )
+        loc = loc_match.group(1).lower() if loc_match else ""
+
+        name_match = re.search(
+            r"\b(?:as|named|name)\s+([^\\/:*?\"<>|]+)",
+            chunk_text,
+            flags=re.IGNORECASE,
+        )
+        if not name_match:
+            name_match = re.search(
+                r"\bsave\s+(?:it|this|the\s+file|file)?\s*([^\\/:*?\"<>|]+\.[\w\-]+)",
+                chunk_text,
+                flags=re.IGNORECASE,
+            )
+        filename = name_match.group(1).strip() if name_match else ""
+        if loc and filename:
+            filename = re.split(r"\s+(?:to|in|on|into)\s+", filename, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+
+        if filename and "." not in filename:
+            filename = f"{filename}.txt"
+
+        if loc:
+            filename = filename or "note.txt"
+            path = f"{loc}\\{filename}"
+        elif filename:
+            path = filename
+        else:
+            return None
+
+        params = {"path": path}
+        if last_literal_text:
+            params["content"] = last_literal_text
+        return {"intent": "save_file", "parameters": params}
     for chunk in chunks:
         open_match = re.match(r"^open\s+(.+)$", chunk, re.IGNORECASE)
         if open_match:
             targets = [t.strip() for t in re.split(r"\s+\band\b\s+", open_match.group(1), flags=re.IGNORECASE) if t.strip()]
             for target in targets:
+                save_target = _parse_save_target(target)
+                if save_target:
+                    steps.append(save_target)
+                    continue
                 write_in_open = re.match(r"^(?:write|type)\s+(.+)$", target, re.IGNORECASE)
                 if write_in_open:
                     content = write_in_open.group(1).strip()
@@ -452,10 +628,16 @@ def _parse_multistep_command(user_text: str) -> dict | None:
                         steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
                     else:
                         steps.append({"intent": "type_text", "parameters": {"text": content}})
+                        last_literal_text = content
                     continue
                 parsed = _parse_open_target(target)
                 if parsed:
                     steps.append(parsed)
+            continue
+
+        save_match = _parse_save_target(chunk)
+        if save_match:
+            steps.append(save_match)
             continue
 
         write_match = re.match(r"^(?:write|type)\s+(.+)$", chunk, re.IGNORECASE)
@@ -465,9 +647,15 @@ def _parse_multistep_command(user_text: str) -> dict | None:
                 steps.append({"intent": "type_text", "parameters": {"generate": True, "prompt": content}})
             else:
                 steps.append({"intent": "type_text", "parameters": {"text": content}})
+                last_literal_text = content
             continue
 
-        parsed = _parse_system_command(chunk) or _parse_browser_command(chunk) or _parse_scheduler_command(chunk)
+        parsed = (
+            _parse_system_command(chunk)
+            or _parse_app_control_command(chunk)
+            or _parse_browser_command(chunk)
+            or _parse_scheduler_command(chunk)
+        )
         if parsed:
             steps.append(parsed)
             continue
@@ -748,10 +936,32 @@ def process_text_stream(
     Yields:
         Narration lines (strings) — one per event.
     """
+    clear_cancel()
     if not user_text or not user_text.strip():
         yield "No input received."
         return
     normalized_text = _normalize_user_text(user_text)
+
+    # ── Follow-up detection ──────────────────────────────────────────────────
+    # Handle short affirmations/negations that reference the previous interaction
+    if _is_followup(user_text) and _LAST_INTERACTION.get("user_text"):
+        lower = user_text.strip().lower()
+        # Negative follow-ups → cancel
+        if lower in {"no", "nah", "nope", "don't", "cancel", "stop", "never mind"}:
+            yield "Okay, never mind."
+            return
+        # Positive follow-ups → re-execute with context
+        if lower in {"yes", "yeah", "yep", "yup", "sure", "ok", "okay",
+                      "go ahead", "do it", "proceed", "confirm", "go",
+                      "please", "yes please", "you can", "you can do that",
+                      "that's fine", "that works", "alright", "do that"}:
+            last_intent = _LAST_INTERACTION.get("intent", "")
+            last_params = _LAST_INTERACTION.get("parameters", {})
+            if last_intent and last_intent not in {"conversational", "answer_question", "unknown", ""}:
+                # Re-execute the last action with confirmation
+                user_text = _LAST_INTERACTION.get("user_text", user_text)
+                normalized_text = _normalize_user_text(user_text)
+                yield f"Got it — proceeding with: {user_text}"
 
     # ── Optional: inline confirmation prefix (non-interactive UI/voice) ────
     # Supports: "confirm shutdown", "confirm delete file ..." etc.
@@ -761,10 +971,24 @@ def process_text_stream(
     # Fast heuristic check first (no LLM call needed for obvious greetings)
     try:
         if is_conversational(normalized_text):
+            if cancel_requested():
+                yield "Canceled."
+                return
             augmented = _build_context_prompt(user_text)
             with llm_busy_context():
                 reply = generate_text(augmented).strip()
+            if cancel_requested():
+                yield "Canceled."
+                return
             yield reply or "I'm not sure how to respond to that."
+            # Subconscious layer: detect latent concerns
+            try:
+                from core.subconscious_layer import analyse
+                nudge = analyse(user_text)
+                if nudge:
+                    yield f"\n💡 {nudge}"
+            except Exception:
+                pass
             return
     except Exception:
         pass  # fall through to action classification
@@ -773,11 +997,21 @@ def process_text_stream(
     payload: dict[str, Any] = {}
 
     # Fast parsers first (no Ollama call, instant)
-    for parser in (_parse_system_command, _parse_scheduler_command, _parse_browser_command):
-        result = parser(user_text)
-        if isinstance(result, dict):
-            payload = result
-            break
+    multi = _parse_multistep_command(normalized_text)
+    if isinstance(multi, dict):
+        payload = multi
+
+    if not payload:
+        for parser in (
+            _parse_system_command,
+            _parse_app_control_command,
+            _parse_scheduler_command,
+            _parse_browser_command,
+        ):
+            result = parser(user_text)
+            if isinstance(result, dict):
+                payload = result
+                break
 
     # LLM classification if fast parsers didn't match
     if not payload:
@@ -795,9 +1029,23 @@ def process_text_stream(
         if classified.get("intent") in {"conversational", "answer_question"}:
             prompt = classified.get("parameters", {}).get("prompt") or user_text
             augmented = _build_context_prompt(prompt)
+            if cancel_requested():
+                yield "Canceled."
+                return
             with llm_busy_context():
                 _reply = generate_text(augmented).strip()
+            if cancel_requested():
+                yield "Canceled."
+                return
             yield _reply or "I'm not sure how to respond."
+            # Subconscious layer: detect latent concerns
+            try:
+                from core.subconscious_layer import analyse
+                nudge = analyse(user_text)
+                if nudge:
+                    yield f"\n💡 {nudge}"
+            except Exception:
+                pass
             return
 
         payload = classified
@@ -836,8 +1084,14 @@ def process_text_stream(
     if intent in {"answer_question", "type_generated_text"}:
         prompt = (payload.get("parameters") or {}).get("prompt") or user_text
         augmented = _build_context_prompt(prompt)
+        if cancel_requested():
+            yield "Canceled."
+            return
         with llm_busy_context():
             generated = generate_text(augmented).strip()
+        if cancel_requested():
+            yield "Canceled."
+            return
         if not generated:
             yield "No response generated."
             return
@@ -863,17 +1117,36 @@ def process_text_stream(
         yield f"Got it — I'll do {total} things for you.\n"
 
         results_all: list[str] = []
+        last_typed_text: str | None = None
 
         for i, raw_step in enumerate(steps, 1):
+            if cancel_requested():
+                yield "Canceled."
+                return
             step_intent = str(raw_step.get("intent", "")).strip().lower()
             step_params = raw_step.get("parameters") or {}
 
             # Generate content if this step needs LLM-produced text
             step = _generate_step_content(raw_step)
             step_params = step.get("parameters") or {}
+            if step_intent == "type_text":
+                typed_text = step_params.get("text")
+                if isinstance(typed_text, str) and typed_text:
+                    last_typed_text = typed_text
+            if step_intent in {"save_file", "create_file"} and not step_params.get("content"):
+                if last_typed_text:
+                    step_params = {**step_params, "content": last_typed_text}
+                    step = {"intent": step_intent, "parameters": step_params}
+            if cancel_requested():
+                yield "Canceled."
+                return
 
             label = _label_for_step(step_intent, step_params)
             yield _step_header(i, total, label)
+
+            if cancel_requested():
+                yield "Canceled."
+                return
 
             # Safety check per step
             if is_blocked(step):
@@ -920,6 +1193,24 @@ def process_text_stream(
             try:
                 outcome = dispatch_intent(step)
                 result_str = str(outcome).strip() if outcome is not None else "Done."
+
+                # ── Smart inter-step delay ───────────────────────────────────
+                # When opening an app, wait for it to load before the next step
+                # (especially before type_text — the window must be focused first)
+                if step_intent == "open_app" and i < total:
+                    next_step_intent = str((steps[i] if i < len(steps) else {}).get("intent", "")).lower()
+                    if next_step_intent in ("type_text", "press_key", "hotkey"):
+                        import time as _time
+                        app_name = step_params.get("app_name", "app")
+                        yield f"  ⏳ Waiting for {app_name} to load..."
+                        _time.sleep(2.5)  # Give the app time to open and gain focus
+                        # Bring it to front by clicking its taskbar button
+                        try:
+                            import pyautogui as _pag
+                            _pag.click()  # click on current focus position to ensure keyboard focus
+                        except Exception:
+                            pass
+
                 try:
                     assessment = assess_risk(step)
                     log_action(
@@ -936,6 +1227,7 @@ def process_text_stream(
                 yield _step_success(i, total, label, result_str)
                 results_all.append(f"Step {i}: {result_str[:60]}")
             except Exception as exc:
+
                 try:
                     assessment = assess_risk(step)
                     log_action(
@@ -1045,10 +1337,17 @@ def process_text_stream(
     label = _label_for_step(intent, parameters)
     yield _step_header(1, 1, label)
 
+    if cancel_requested():
+        yield "Canceled."
+        return
+
     try:
         result = dispatch_intent({"intent": intent, "parameters": parameters,
                                   **{k: v for k, v in payload.items()
                                      if k not in {"intent", "parameters"}}})
+        if cancel_requested():
+            yield "Canceled."
+            return
         result_str = result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False)
         try:
             assessment = assess_risk(payload)
@@ -1062,8 +1361,22 @@ def process_text_stream(
             )
         except Exception:
             pass
+        _update_last_interaction(user_text, intent, parameters, result_str)
         yield _step_success(1, 1, label, result_str)
     except Exception as exc:
+        error_msg = str(exc)
+        # ── Graceful handling for common errors ──────────────────────────
+        # App not found: don't show scary error, give helpful message
+        if intent in {"open_app", "close_window"} and "not found" in error_msg.lower():
+            app_name = parameters.get("app_name", "")
+            yield f"I couldn't find '{app_name}' on your system. Check the name and try again."
+            _update_last_interaction(user_text, intent, parameters, error_msg)
+            return
+        # Permission denied: suggest running as admin
+        if "access" in error_msg.lower() and "denied" in error_msg.lower():
+            yield f"⚠️  Permission denied. This action may require administrator privileges."
+            _update_last_interaction(user_text, intent, parameters, error_msg)
+            return
         try:
             assessment = assess_risk(payload)
             log_action(
@@ -1071,12 +1384,13 @@ def process_text_stream(
                 parameters=parameters,
                 risk_level=assessment.level,
                 outcome=OUTCOME_ERROR,
-                result_summary=str(exc),
+                result_summary=error_msg,
                 user_input=user_text,
             )
         except Exception:
             pass
-        yield _step_error(1, 1, label, str(exc))
+        _update_last_interaction(user_text, intent, parameters, error_msg)
+        yield _step_error(1, 1, label, error_msg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

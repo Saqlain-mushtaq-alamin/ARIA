@@ -31,7 +31,10 @@ import webbrowser
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, Generator, List, Optional
 
-import ollama
+try:
+    import ollama
+except Exception:
+    ollama = None
 
 try:
     from vision.screen_reader import llm_busy_context
@@ -93,6 +96,10 @@ Always include a brief usage example at the end."""
 # Low-level Ollama helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _require_ollama() -> None:
+    if ollama is None:
+        raise RuntimeError("Ollama is not installed. Install it to use LLM features.")
+
 def _chat(
     messages: List[Dict[str, str]],
     model: str = DEFAULT_MODEL,
@@ -100,6 +107,7 @@ def _chat(
     max_tokens: int = 2048,
 ) -> str:
     """Send messages to Ollama and return the assistant reply as a string."""
+    _require_ollama()
     with llm_busy_context():
         response = ollama.chat(
             model=model,
@@ -119,6 +127,7 @@ def _chat_stream(
     temperature: float = 0.7,
 ) -> Generator[str, None, None]:
     """Stream tokens from Ollama one chunk at a time."""
+    _require_ollama()
     with llm_busy_context():
         stream = ollama.chat(
             model=model,
@@ -746,6 +755,9 @@ def analyse_image(
     """
     import base64
     import os
+
+    if ollama is None:
+        return "Vision model unavailable: Ollama is not installed."
 
     if not os.path.exists(image_path):
         return f"Image not found: {image_path}"

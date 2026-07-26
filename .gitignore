@@ -44,3 +44,8 @@ memory/*.png
 
 vision/models
 *.task
+
+data
+data/logs
+
+planing 

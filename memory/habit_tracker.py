@@ -715,3 +715,31 @@ def mark_habit_skipped(
         db_path=db_path,
     )
     return f"Noted, Sir — {habit_name} skipped today{(': ' + reason) if reason else ''}."
+
+
+def get_all_habits_summary(db_path: str = DEFAULT_DB_PATH) -> str:
+    """Return a formatted summary of all tracked habits with streaks."""
+    try:
+        conn = _get_conn(db_path)
+        rows = conn.execute(
+            "SELECT DISTINCT habit_name FROM events ORDER BY habit_name"
+        ).fetchall()
+    except Exception:
+        return "Sir, I don't have any habit data yet."
+
+    if not rows:
+        return "Sir, no habits are being tracked yet. Say 'log habit gym' to start."
+
+    lines = ["📊 Your Habits", "━" * 40]
+    for (name,) in rows:
+        streak = get_streak(name, db_path=db_path)
+        cur = streak.get("current", 0)
+        best = streak.get("best", 0)
+        total = streak.get("total_count", 0)
+        fire = "🔥 " if cur > 0 else "  "
+        lines.append(
+            f"  {fire}{name.title()}: {cur}-day streak "
+            f"(best: {best}, total: {total})"
+        )
+    lines.append("━" * 40)
+    return "\n".join(lines)

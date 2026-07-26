@@ -204,6 +204,7 @@ _INTENT_RISK_TABLE: Dict[str, Tuple[str, str]] = {
     "get_news":         (SAFE,      "Fetching news is safe."),
     "search_papers":    (SAFE,      "Searching papers is safe."),
     "get_stock":        (SAFE,      "Fetching stock data is safe."),
+    "download":         (SAFE,      "Downloading a file is safe (URL will be scanned)."),
     "list_directory":   (SAFE,      "Listing a directory is safe."),
     "read_file":        (SAFE,      "Reading a file is safe (path will be checked)."),
     "show_schedule":    (SAFE,      "Showing schedule is safe."),
@@ -443,7 +444,7 @@ def assess_risk(payload: Dict[str, Any]) -> RiskAssessment:
                 _escalate(lvl, reason)
 
     # 4. URL checks
-    url_val = params.get("url") or params.get("link") or ""
+    url_val = params.get("url") or params.get("link") or params.get("target") or ""
     if url_val:
         lvl, reason = _check_url_safety(str(url_val))
         if lvl != SAFE:

@@ -9,6 +9,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# ── Settings system (load FIRST, before anything reads env vars) ─────────────
+try:
+    from config.settings import apply_to_env as _apply_settings_to_env
+    _apply_settings_to_env()
+    print("[settings] Settings loaded and applied.")
+except Exception as _exc:
+    print(f"[settings] Could not load settings ({_exc}), using defaults.")
+
 from core.agent import process_text, _cli_ask
 from memory.conversation_log import log_interaction
 from voice.stt import listen_and_transcribe
@@ -318,6 +326,38 @@ def _run_headless() -> None:
         time.sleep(0.5)
 
 
+def _start_upgrade_daemons() -> None:
+    """Start all upgrade-related background daemon threads."""
+    try:
+        from config.settings import get as get_setting
+    except Exception:
+        return
+
+    # Cognitive monitor (keyboard timing analysis)
+    if get_setting("cognitive_monitor.enabled", True):
+        try:
+            from vision.cognitive_monitor import start_cognitive_monitor
+            start_cognitive_monitor()
+        except Exception as exc:
+            print(f"[cognitive_monitor] Failed to start: {exc}")
+
+    # Productivity guardian (distraction detection)
+    if get_setting("productivity_guardian.enabled", True):
+        try:
+            from modules.productivity_guardian import start_guardian
+            start_guardian()
+        except Exception as exc:
+            print(f"[productivity_guardian] Failed to start: {exc}")
+
+    # Autonomous planner (morning briefing + evening review)
+    if get_setting("autonomous_planner.enabled", True):
+        try:
+            from scheduler.autonomous_planner import start_autonomous_planner
+            start_autonomous_planner()
+        except Exception as exc:
+            print(f"[autonomous_planner] Failed to start: {exc}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="ARIA assistant")
     parser.add_argument(
@@ -330,6 +370,9 @@ def main(argv: list[str] | None = None) -> int:
     _load_env()
     _ensure_cache_dirs()
     _start_emotion_detector()
+
+    # ── Start upgrade daemon threads ─────────────────────────────────────
+    _start_upgrade_daemons()
 
     headless = bool(args.headless) or os.getenv("ARIA_HEADLESS", "").strip().lower() in {"1", "true", "yes", "on"}
     if headless:

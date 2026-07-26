@@ -1,0 +1,2 @@
+{"timestamp": "2026-06-01T01:19:31.479900+00:00", "event": "send_cancelled", "reason": "non_interactive", "platform": "telegram"}
+{"timestamp": "2026-06-01T16:48:29.465504+00:00", "event": "messages_read", "platform": "whatsapp"}

@@ -1,0 +1,85 @@
+ARIA Test Report -- 2026-07-26 16:57:06
+============================================================
+[PHASE1      ] [PASS]  open notepad → open_app intent
+[PHASE1      ] [PASS]  set volume to 50 → set_volume intent
+[PHASE1      ] [PASS]  turn off wifi → toggle_wifi intent
+[PHASE1      ] [PASS]  search for python tutorials → search_web
+[PHASE1      ] [PASS]  close chrome → close_window intent
+[PHASE1      ] [PASS]  open notepad and type hello → multi_step [open_app, type_text]
+[PHASE1      ] [PASS]  open notepad and write a story then save on desktop → 3 steps
+[PHASE1      ] [PASS]  STT typo: 'nodepad' corrected to notepad
+[PHASE1      ] [PASS]  Conversational: 'hello' → is_conversational=True
+[PHASE1      ] [PASS]  Conversational: 'how are you' → is_conversational=True
+[PHASE1      ] [PASS]  Actionable: 'open chrome' → is_conversational=False
+[PHASE1      ] [PASS]  LLM: weather command → get_weather intent
+[PHASE1      ] [PASS]  LLM: news → get_news intent
+[PHASE1      ] [PASS]  LLM: multi-step notepad + story → multi_step from LLM
+[PHASE2      ] [PASS]  STT: 'note pad' → 'notepad'
+[PHASE2      ] [PASS]  STT: 'bad pad' → 'notepad'
+[PHASE2      ] [PASS]  STT: 'task maneger' → 'task manager'
+[PHASE2      ] [PASS]  STT: 'fire fox' → 'firefox'
+[PHASE2      ] [PASS]  STT: 'set volume at 30' normalised
+[PHASE2      ] [PASS]  STT: 'set volume to 75' normalised
+[PHASE2      ] [PASS]  Garbage: '...' → rejected
+[PHASE2      ] [PASS]  Garbage: 'uh um hmm' → rejected
+[PHASE2      ] [PASS]  Garbage: lone article 'the' → rejected
+[PHASE2      ] [PASS]  Garbage: 'open notepad' → NOT rejected
+[PHASE2      ] [PASS]  Garbage: 'what is the weather in Dhaka' → NOT rejected
+[PHASE2      ] [PASS]  Garbage: whisper echo of system prompt → rejected
+[PHASE2      ] [PASS]  TTS: speak() doesn't crash on normal text
+[PHASE2      ] [PASS]  TTS: sanitize strips leading glyphs
+[PHASE2      ] [PASS]  TTS: sanitize handles unicode
+[PHASE3      ] [PASS]  open_app('notepad') returns success string
+[PHASE3      ] [PASS]  open_app('chrome') returns success string
+[PHASE3      ] [PASS]  APP_ALIASES contains notepad mapping
+[PHASE3      ] [PASS]  APP_ALIASES contains chrome mapping
+[PHASE3      ] [PASS]  APP_ALIASES contains file explorer mapping
+[PHASE3      ] [PASS]  set_volume(40) returns success string
+[PHASE3      ] [PASS]  set_volume(0) doesn't crash
+[PHASE3      ] [PASS]  set_volume(100) doesn't crash
+[PHASE3      ] [PASS]  take_screenshot saves PNG file
+[PHASE3      ] [PASS]  save_file creates file with content
+[PHASE3      ] [PASS]  save_file creates parent directories
+[PHASE3      ] [PASS]  create_file is alias for save_file
+[PHASE3      ] [PASS]  list_directory returns formatted listing
+[PHASE3      ] [PASS]  resolve_path('desktop') → real Desktop path
+[PHASE3      ] [PASS]  resolve_path('downloads') → real Downloads path
+[PHASE3      ] [PASS]  delete_file moves to recycle buffer
+[PHASE4      ] [PASS]  get_weather('Dhaka') returns weather string
+[PHASE4      ] [PASS]  get_weather('current') doesn't crash
+[PHASE4      ] [PASS]  get_weather('London') returns data or network error
+[PHASE4      ] [PASS]  get_news() returns top headlines
+[PHASE4      ] [PASS]  get_news(topic='technology') returns tech news
+[PHASE4      ] [PASS]  get_news(count=3) returns at most 3 items
+[PHASE4      ] [PASS]  get_stock('AAPL') returns price string
+[PHASE4      ] [PASS]  search_web function exists and is callable
+[PHASE4      ] [PASS]  open_url function exists and is callable
+[PHASE4      ] [PASS]  DDG search results function available
+[PHASE5      ] [PASS]  log_interaction saves entry to DB
+[PHASE5      ] [PASS]  get_full_context_string returns non-empty string
+[PHASE5      ] [PASS]  Conversation log can be queried after write
+[PHASE5      ] [PASS]  User profile address_form is 'Sir'
+[PHASE5      ] [PASS]  get_profile_summary returns formatted string
+[PHASE5      ] [PASS]  Agent conversational reply mentions 'Sir' for greetings
+[PHASE6      ] [PASS]  create_schedule_from_text creates a plan
+[PHASE6      ] [PASS]  show_schedule returns plan or empty message
+[PHASE6      ] [PASS]  whats_next returns next task or empty
+[PHASE6      ] [PASS]  has_plan returns bool
+[PHASE6      ] [PASS]  decompose_goal returns step list for 'learn Python'
+[PHASE6      ] [PASS]  decompose_goal handles no deadline
+[SAFETY      ] [PASS]  delete System32 notepad.exe is BLOCKED
+[SAFETY      ] [PASS]  disable_antivirus is BLOCKED
+[SAFETY      ] [PASS]  Mass wildcard delete is DANGEROUS or BLOCKED
+[SAFETY      ] [PASS]  Command injection in type_text is BLOCKED
+[SAFETY      ] [PASS]  SSH private key access is BLOCKED
+[SAFETY      ] [PASS]  IP-based URL is flagged CONFIRM or BLOCKED
+[SAFETY      ] [PASS]  shutdown requires confirmation
+[SAFETY      ] [PASS]  delete file requires DANGEROUS-level confirmation
+[SAFETY      ] [PASS]  send message requires confirmation
+[SAFETY      ] [PASS]  open_app notepad is SAFE
+[SAFETY      ] [PASS]  search_web is SAFE
+[SAFETY      ] [PASS]  set_volume is SAFE
+[SAFETY      ] [PASS]  Audit log records every action
+[SAFETY      ] [PASS]  Audit log integrity passes
+============================================================
+PASS: 81  FAIL: 0  SKIP: 0  TOTAL: 81

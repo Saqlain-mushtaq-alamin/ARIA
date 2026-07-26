@@ -108,11 +108,50 @@ Browser & web:
   search_papers     → parameters.query (string), parameters.source (optional: arxiv/scholar/pubmed)
   get_stock         → parameters.symbol (string)
 
+Downloads:
+    download          → parameters.url (string for file/video/audio),
+                                            parameters.mode (optional: auto/video/audio/paper),
+                                            parameters.query (string when mode=paper),
+                                            parameters.output_name (optional string),
+                                            parameters.open_folder (optional bool),
+                                            parameters.open_file (optional bool)
+
 Scheduler:
   create_schedule   → parameters.text (string with task descriptions)
   show_schedule     → no parameters
   whats_next        → no parameters
   edit_schedule     → parameters.command (string)
+
+Upgrade features:
+  comment_on_post   → parameters.tone (optional: "thoughtful", "funny", "supportive")
+  explain_selected  → no parameters (reads highlighted text from screen)
+  start_focus_mode  → parameters.task (string), parameters.work_minutes (optional int)
+  stop_focus_mode   → no parameters
+  decompose_goal    → parameters.goal (string), parameters.deadline (optional string)
+  show_settings     → parameters.section (optional: "emotion", "screen_reader", "llm", etc.)
+  change_setting    → parameters.key (string like "emotion.enabled"), parameters.value (any)
+  query_knowledge   → parameters.topic (string)
+  show_habits       → no parameters
+  mark_habit        → parameters.habit_name (string like "gym", "study")
+  show_profile      → no parameters
+
+Messaging:
+  send_message      → parameters.platform ("whatsapp"/"telegram"/"messenger"),
+                       parameters.recipient (string), parameters.message (string)
+  read_messages     → parameters.platform ("whatsapp"/"telegram"/"messenger"),
+                       parameters.limit (optional int, default 10)
+
+Media control:
+  media_play_pause  → parameters.app (optional: "spotify", "vlc", "youtube")
+  media_next        → parameters.app (optional)
+  media_prev        → parameters.app (optional)
+  media_volume      → parameters.level (int 0-100), parameters.app (optional)
+  media_search      → parameters.query (string), parameters.app (optional: "spotify", "youtube")
+  media_stop        → parameters.app (optional)
+
+Notifications:
+  send_notification → parameters.title (string), parameters.message (string)
+  notify_reminder   → parameters.task (string), parameters.time (optional time string)
 
 Conversational / LLM:
   answer_question   → parameters.prompt (string - the user's full question)
@@ -128,6 +167,23 @@ Notes for multi-step commands:
   parameters.prompt to describe what to generate.
 - If user mentions typos like "nodepad", "fle explorere", or "activite kinetic",
   normalize to the proper intent and parameters.
+- "show settings" or "show my settings" → show_settings
+- "turn off emotion detector" or "disable screen reader" → change_setting
+- "start focus mode for coding" → start_focus_mode with task="coding"
+- "comment on this post" → comment_on_post
+- "explain this" or "what does this mean" (when text is selected) → explain_selected
+- "plan my goal: learn python in 30 days" → decompose_goal
+- "download https://example.com/file.pdf" → download with url
+- "download this youtube video" → download with mode=video and url
+- "download paper attention is all you need" → download with mode=paper and query
+- If user says "download and open it" → set download parameters.open_file=true
+- If user says "download and open folder" → set download parameters.open_folder=true
+- "send hello to John on WhatsApp" → send_message(platform=whatsapp, recipient=John, message=hello)
+- "check my messages on telegram" → read_messages(platform=telegram)
+- "play music" or "pause" → media_play_pause
+- "skip track" or "next song" → media_next
+- "play bohemian rhapsody on spotify" → media_search(query=bohemian rhapsody, app=spotify)
+- "set a reminder: call mom at 3pm" → notify_reminder(task=call mom, time=3pm)
 
 Return ONLY the JSON. No markdown. No explanation.
 """
@@ -192,6 +248,7 @@ def _normalize_user_text(user_text: str) -> str:
         (r"\bkinitic\b", "kinetic"),
         (r"\bbluetooh\b", "bluetooth"),
         (r"\bwi[\s-]?fi\b", "wifi"),
+        (r"\bdownlad\b", "download"),
     ]
     for pattern, repl in replacements:
         text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
