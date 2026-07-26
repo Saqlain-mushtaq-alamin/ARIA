@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tests.test_runner import test, run_all
 from safety.harm_classifier import (
     assess_risk, SAFE, CONFIRM, DANGEROUS, BLOCKED,
-    requires_confirmation,
 )
+from safety.confirmation_engine import requires_confirmation
 
 
 # ── BLOCKED actions ────────────────────────────────────────────────────────────
