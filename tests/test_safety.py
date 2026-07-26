@@ -78,10 +78,10 @@ def t_confirm_shutdown():
 
 @test("delete file requires DANGEROUS-level confirmation", "SAFETY", "confirm")
 def t_confirm_delete():
-    # delete_file is DANGEROUS in harm_classifier — which means requires_confirmation is True
-    payload = {"intent": "delete_file", "parameters": {"path": "test.txt"}}
+    # delete_file is DANGEROUS in harm_classifier.
+    # Use a real-depth path so it doesn't hit the root-depth BLOCKED guard.
+    payload = {"intent": "delete_file", "parameters": {"path": "C:/Users/me/Documents/report.txt"}}
     r = assess_risk(payload)
-    # DANGEROUS is a superset of CONFIRM (it needs confirmation too)
     assert r.level in (CONFIRM, DANGEROUS), f"Expected CONFIRM or DANGEROUS, got {r.level}"
     assert requires_confirmation(payload) is True, "delete_file should require confirmation"
 

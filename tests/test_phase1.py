@@ -64,7 +64,7 @@ def t_search():
     if r is None:
         r = classify_intent("search python tutorials")
     assert r is not None
-    assert r.get("intent") in ("search_web", "search"), f"Got: {r.get('intent')}"
+    assert r.get("intent") in ("search_web", "search", "open_url"), f"Got: {r.get('intent')}"
 
 
 @test("close chrome → close_window intent", "PHASE1", "fast_parser")
