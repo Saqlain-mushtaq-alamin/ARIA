@@ -14,8 +14,10 @@ from tests.test_runner import test, run_all
 
 from core.command_parser import (
     _parse_multistep_command,
-    _parse_system_command,
     _parse_browser_command,
+)
+from core.agent import (
+    _parse_system_command,
     _parse_app_control_command,
 )
 from core.intent_classifier import classify_intent, is_conversational
